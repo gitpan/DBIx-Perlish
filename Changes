@@ -1,0 +1,58 @@
+Revision history for DBIx-Perlish
+
+0.12  Wed Feb  7 13:24:19 2007
+       Documentation and makefile cleanup.
+
+0.11  Wed Feb  7 12:38:38 2007
+       Sub-queries can refer to tables in the outer scope.
+       Translate "lc" and "uc" to "lower" and "upper", respectively.
+       Added support to EXISTS-style sub-queries.
+       Added support for SELECT DISTINCT.
+       Added support for special labels syntax.
+
+0.10  Tue Feb  6 09:46:58 2007
+       Added support for simple funcalls.
+       PadWalker module is now optional.
+       Terms can stand by themselves.
+
+0.09  Mon Feb  5 14:27:52 2007
+       Added db_update().
+
+0.08  Mon Feb  5 12:16:22 2007
+       Added support of subselects on threaded perls.
+       Regexes on older versions of SQLite made to work.
+       Implemented db_insert().
+
+0.07  Sun Feb  4 23:18:07 2007
+       Added regex support for SQLite.
+       Added support for "OR".
+
+0.06  Sun Feb  4 19:07:15 2007
+       Db_delete & delete implemented.
+       Native regexes are used if supported by RDBMS.
+       Case-insensitive regex matching supported.
+
+0.05  Sat Feb  3 23:28:15 2007
+       Subselects with <- syntax added.
+
+0.04  Thu Feb  1 13:08:29 2007
+       More docs.
+       Added OO interface.
+       Added init().
+       Fixed parsing of the constants in perl 5.8.4.
+       Added support for return ($u->id, foo => $z->name).
+       Added suppression of some warnings.
+
+0.03  Thu Feb  1 13:08:29 2007
+       More docs.
+       Introduce $SQL & @BIND_VALUES globals (for debugging).
+
+0.02  Thu Feb  1 10:06:49 2007
+       Binary comparison operators work.
+       Four binary arithmetic operators work.
+       last unless 5..20 works.
+       First cut at working db_fetch {}.
+
+0.01  Fri Jan 26 14:54:23 2007
+       Initial release.
+
