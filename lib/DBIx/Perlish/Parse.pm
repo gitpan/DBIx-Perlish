@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.23 2007/02/07 12:26:55 tobez Exp $
+# $Id: Parse.pm,v 1.27 2007/02/09 11:31:57 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -130,22 +130,54 @@ sub get_all_children
 	@op;
 }
 
-sub get_table
-{
-	my ($S, $op) = @_;
-	want_const($S, $op);
-}
-
 sub padname
 {
-	my ($S, $op) = @_;
+	my ($S, $op, %p) = @_;
 
 	my $padname = $S->{padlist}->[0]->ARRAYelt($op->targ);
 	if ($padname && ref($padname) ne "B::SPECIAL") {
+		return if $p{no_fakes} && $padname->FLAGS & B::SVf_FAKE;
 		return "my " . $padname->PVX;
 	} else {
 		return "my #" . $op->targ;
 	}
+}
+
+sub get_value
+{
+	my ($S, $op, %p) = @_;
+
+	my $val;
+	if (is_op($op, "padsv")) {
+		if (find_aliased_tab($S, $op)) {
+			bailout $S, "cannot use a table variable as a value";
+		}
+		my $vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
+		$val = $$vv;
+	} elsif (is_binop($op, "helem")) {
+		my $key = is_const($S, $op->last);
+		bailout $S, "only constant hash keys are understood" unless $key;
+		$op = $op->first;
+		my $vv;
+		if (is_op($op, "padhv")) {
+			$vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
+		} elsif (is_unop($op, "rv2hv")) {
+			$op = $op->first;
+			if (is_op($op, "padsv")) {
+				if (find_aliased_tab($S, $op)) {
+					bailout $S, "cannot use a table variable as a value";
+				}
+				$vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
+				$vv = $$vv;
+			}
+		}
+		bailout $S, "unable to extract a value from a hash(ref)" unless $vv;
+		$val = $vv->{$key};
+	} else {
+		return () if $p{soft};
+		bailout $S, "cannot parse this as a value or value reference";
+	}
+	return ($val, 1);
 }
 
 sub get_var
@@ -219,7 +251,7 @@ sub maybe_one_table_only
 	my ($S) = @_;
 	return if $S->{operation} eq "select";
 	if ($S->{tabs} && keys %{$S->{tabs}} or $S->{vars} && keys %{$S->{vars}}) {
-		bailout "a $S->{operation}'s query sub can only refer to a single table";
+		bailout $S, "a $S->{operation}'s query sub can only refer to a single table";
 	}
 }
 
@@ -250,7 +282,7 @@ sub new_var
 
 sub try_parse_attr_assignment
 {
-	my ($S, $op) = @_;
+	my ($S, $op, $realname) = @_;
 	return unless is_unop($op, "entersub");
 	$op = want_unop($S, $op);
 	return unless is_op($op, "pushmark");
@@ -271,6 +303,13 @@ sub try_parse_attr_assignment
 	$op = $op->sibling;
 	return unless is_svop($op, "method_named");
 	return unless want_method($S, $op, "import");
+	if ($realname) {
+		if (lc $attr eq "table") {
+			$attr = $realname;
+		} else {
+			bailout $S, "cannot decide whether you refer to $realname table or to $attr table";
+		}
+	}
 	new_var($S, $varn, $attr);
 	return $attr;
 }
@@ -288,14 +327,18 @@ sub parse_return
 {
 	my ($S, $op) = @_;
 	my @op = get_all_children($op);
-	bailout "there should be no \"return\" statements in $S->{operation}'s query sub"
+	bailout $S, "there should be no \"return\" statements in $S->{operation}'s query sub"
 		unless $S->{operation} eq "select";
-	bailout "there should be at most one return statement" if $S->{returns};
+	bailout $S, "there should be at most one return statement" if $S->{returns};
 	$S->{returns} = [];
 	my $last_alias;
 	for $op (@op) {
 		my %rv = parse_return_value($S, $op);
-		if (exists $rv{field}) {
+		if (exists $rv{table}) {
+			bailout $S, "cannot alias the whole table"
+				if defined $last_alias;
+			push @{$S->{returns}}, "$rv{table}.*";
+		} if (exists $rv{field}) {
 			if (defined $last_alias) {
 				push @{$S->{returns}}, "$rv{field} as $last_alias";
 				undef $last_alias;
@@ -303,12 +346,12 @@ sub parse_return
 				push @{$S->{returns}}, $rv{field};
 			}
 		} elsif (exists $rv{alias}) {
-			bailout "bad alias name \"$rv{alias}\""
+			bailout $S, "bad alias name \"$rv{alias}\""
 				unless $rv{alias} =~ /^\w+$/;
-			bailout "cannot alias an alias"
+			bailout $S, "cannot alias an alias"
 				if defined $last_alias;
 			if (lc $rv{alias} eq "distinct") {
-				bailout "\"$rv{alias}\" is not a valid alias name" if @{$S->{returns}};
+				bailout $S, "\"$rv{alias}\" is not a valid alias name" if @{$S->{returns}};
 				$S->{distinct}++;
 				next;
 			}
@@ -324,12 +367,14 @@ sub parse_return_value
 	if (is_unop($op, "entersub")) {
 		my ($t, $f) = get_tab_field($S, $op);
 		return field => "$t.$f";
+	} elsif (is_op($op, "padsv")) {
+		return table => find_aliased_tab($S, $op);
 	} elsif (my $const = is_const($S, $op)) {
 		return alias => $const;
 	} elsif (is_op($op, "pushmark")) {
 		return ();
 	} else {
-		bailout "error parsing return values";
+		bailout $S, "error parsing return values";
 	}
 }
 
@@ -366,6 +411,9 @@ sub parse_term
 				return "not $term";
 			}
 		}
+	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
+		push @{$S->{values}}, $val;
+		return "?";
 	} elsif (is_binop($op)) {
 		my $expr = parse_expr($S, $op);
 		return "($expr)";
@@ -386,30 +434,21 @@ sub parse_term
 			push @{$S->{values}}, $const;
 			return "?";
 		}
-	} elsif (is_op($op, "padsv")) {
-		if (find_aliased_tab($S, $op)) {
-			bailout $S, "cannot use table variable as a term";
-		}
-		my $vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
-		push @{$S->{values}}, $$vv;
-		return "?";
 	} else {
 		bailout $S, "cannot reconstruct term from operation \"",
 				$op->name, '"';
 	}
 }
 
+## XXX above this point 80.parse_bad.t did not go
+
 sub parse_simple_term
 {
 	my ($S, $op) = @_;
 	if (my $const = is_const($S, $op)) {
 		return $const;
-	} elsif (is_op($op, "padsv")) {
-		if (find_aliased_tab($S, $op)) {
-			bailout $S, "cannot use table variable as a simple term";
-		}
-		my $vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
-		return $$vv;
+	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
+		return $val;
 	} else {
 		bailout $S, "cannot reconstruct simple term from operation \"",
 				$op->name, '"';
@@ -489,7 +528,8 @@ sub handle_subselect
 		$gen_args{prefix} = $S->{subselect};
 	}
 	$S->{subselect}++;
-	my ($sql, $vals, $nret) = DBIx::Perlish::gen_sql($subref, "select", %gen_args);
+	my ($sql, $vals, $nret) = DBIx::Perlish::gen_sql($subref, "select",
+		%gen_args);
 	if ($nret != 1 && !$p{returns_dont_care}) {
 		bailout $S, "subselect query sub must return exactly one value\n";
 	}
@@ -502,7 +542,18 @@ sub parse_assign
 {
 	my ($S, $op) = @_;
 
-	bailout $S, "assignments are no understood in $S->{operation}'s query sub"
+	if (is_listop($op->last, "list") &&
+		is_op($op->last->first, "pushmark") &&
+		is_unop($op->last->first->sibling, "entersub"))
+	{
+		my ($val, $ok) = get_value($S, $op->first, soft => 1);
+		if ($ok) {
+			my $tab = try_parse_attr_assignment($S,
+				$op->last->first->sibling, $val);
+			return if $tab;
+		}
+	}
+	bailout $S, "assignments are not understood in $S->{operation}'s query sub"
 		unless $S->{operation} eq "update";
 	if (is_unop($op->first, "srefgen")) {
 		parse_multi_assign($S, $op);
@@ -763,14 +814,14 @@ sub try_parse_range
 	$op = $op->first;
 	return unless is_logop($op, "range");
 	return (parse_simple_term($S, $op->first),
-			parse_simple_term($S, $op->other));
+			parse_simple_term($S, $op->first->sibling));
 }
 
 sub parse_or
 {
 	my ($S, $op) = @_;
-	if (is_op($op->other, "last")) {
-		bailout "there should be no \"last\" statements in $S->{operation}'s query sub"
+	if (is_op($op->first->sibling, "last")) {
+		bailout $S, "there should be no \"last\" statements in $S->{operation}'s query sub"
 			unless $S->{operation} eq "select";
 		my ($from, $to) = try_parse_range($S, $op->first);
 		bailout $S, "range operator expected" unless defined $to;
@@ -829,10 +880,12 @@ sub parse_labels
 {
 	my ($S, $lop) = @_;
 	my $label = $labelmap{$S->{operation}}->{lc $lop->label};
+	if (!$label && lc $lop->label eq "table") {
+		$label = { kind => 'table' };
+	}
 	bailout $S, "label ", $lop->label, " is not understood"
 		unless $label;
 	my $op = $lop->sibling;
-	# TODO add kind fieldlist
 	if ($label->{kind} eq "termlist") {
 		my @op;
 		if (is_listop($op, "list")) {
@@ -882,6 +935,7 @@ sub parse_labels
 		}
 		$S->{skipnext} = 1;
 	} elsif ($label->{kind} eq "numassign") {
+		# TODO more generic values
 		my ($const,$sv) = is_const($S, $op);
 		if (!$sv && is_op($op, "padsv")) {
 			if (find_aliased_tab($S, $op)) {
@@ -896,6 +950,15 @@ sub parse_labels
 		$S->{skipnext} = 1;
 	} elsif ($label->{kind} eq "notice") {
 		$S->{$label->{key}}++;
+	} elsif ($label->{kind} eq "table") {
+		bailout $S, "label ", $lop->label, " must be followed by an assignment"
+			unless $op->name eq "sassign";
+		my $attr = parse_simple_term($S, $op->first);
+		my $varn;
+		bailout $S, "label ", $lop->label, " must be followed by a lexical variable declaration"
+			unless is_op($op->last, "padsv") && ($varn = padname($S, $op->last, no_fakes => 1));
+		new_var($S, $varn, $attr);
+		$S->{skipnext} = 1;
 	} else {
 		bailout $S, "internal error parsing label ", $op->label;
 	}
@@ -930,6 +993,10 @@ sub parse_op
 		# XXX Skip for now, it is either a variable
 		# that does not represent a table, or else
 		# it is already associated with a table in $S.
+	} elsif (is_op($op, "last")) {
+		bailout $S, "there should be no \"last\" statements in $S->{operation}'s query sub"
+			unless $S->{operation} eq "select";
+		$S->{limit} = 1;
 	} elsif (is_op($op, "pushmark")) {
 		# skip
 	} elsif (is_cop($op, "nextstate")) {
