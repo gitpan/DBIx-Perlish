@@ -1,6 +1,6 @@
 use warnings;
 use strict;
-use Test::More tests => 64;
+use Test::More tests => 82;
 use DBIx::Perlish;
 use t::test_utils;
 
@@ -222,5 +222,61 @@ test_select_sql {
 	my $t : table = $self->{table};
 } "vartable attribute",
 "select * from table1 t01",
+[];
+
+# conditional post-if
+my $type = "ICBM";
+test_select_sql {
+	my $t : products;
+	$t->type eq $type if $type;
+} "conditional post-if, true",
+"select * from products t01 where t01.type = ?",
+["ICBM"];
+$type = "";
+test_select_sql {
+	my $t : products;
+	$t->type eq $type if $type;
+} "conditional post-if, false",
+"select * from products t01",
+[];
+
+# special handling of sysdate
+test_select_sql {
+	tab->foo == sysdate();
+} "sysdate() is not special",
+"select * from tab t01 where t01.foo = sysdate()",
+[];
+$main::flavor = "Oracle";
+test_select_sql {
+	tab->foo == sysdate();
+} "sysdate() is special",
+"select * from tab t01 where t01.foo = sysdate",
+[];
+$main::flavor = "";
+
+# verbatim
+test_select_sql {
+	tab->id == sql "some_seq.nextval";
+} "verbatim in select",
+"select * from tab t01 where t01.id = some_seq.nextval",
+[];
+test_update_sql {
+	tab->state eq "new";
+
+	tab->id = sql "some_seq.nextval";
+} "verbatim in update",
+"update tab set id = some_seq.nextval where state = ?",
+['new'];
+
+# expression return
+test_select_sql {
+	return tab->n1 - tab->n2
+} "expression return 1",
+"select (t01.n1 - t01.n2) from tab t01",
+[];
+test_select_sql {
+	return diff => abs(tab->n1 - tab->n2)
+} "expression return 2",
+"select abs((t01.n1 - t01.n2)) as diff from tab t01",
 [];
 

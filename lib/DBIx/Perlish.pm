@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.34 2007/02/09 11:31:57 tobez Exp $
+# $Id: Perlish.pm,v 1.38 2007/02/13 15:36:23 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,8 +10,8 @@ use vars qw($VERSION @EXPORT $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.13';
-@EXPORT = qw(db_fetch db_update db_delete db_insert);
+$VERSION = '0.14';
+@EXPORT = qw(db_fetch db_update db_delete db_insert sql);
 
 use DBIx::Perlish::Parse;
 use DBI::Const::GetInfoType;
@@ -132,14 +132,30 @@ sub insert
 		my $sql = "insert into $table (";
 		$sql .= join ",", keys %$row;
 		$sql .= ") values (";
-		$sql .= join ",", ('?') x keys %$row;
+		my (@v, @b);
+		for my $v (values %$row) {
+			if (ref $v eq 'CODE') {
+				push @v, scalar $v->();
+			} else {
+				push @v, "?";
+				push @b, $v;
+			}
+		}
+		$sql .= join ",", @v;
 		$sql .= ")";
-		return undef unless defined $dbh->do($sql, {}, values %$row);
+		return undef unless defined $dbh->do($sql, {}, @b);
 	}
 	return scalar @rows;
 }
 
-sub sql { $_[0]->{sql} }
+sub sql {
+	my $self = shift;
+	if (ref $self && $self->isa("DBIx::Perlish")) {
+		$self->{sql};
+	} else {
+		sub { $self }
+	}
+}
 sub bind_values { $_[0]->{bind_values} ? @{$_[0]->{bind_values}} : () }
 
 sub gen_sql
@@ -210,6 +226,7 @@ sub gen_sql
 		$sql .= " offset $S->{offset}";
 	}
 	my $v = $S->{set_values} || [];
+	push @$v, @{$S->{ret_values} || []};
 	push @$v, @{$S->{values} || []};
 	return ($sql, $v, $nret);
 }
@@ -225,7 +242,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.13
+This document describes DBIx::Perlish version 0.14
 
 
 =head1 SYNOPSIS
@@ -586,6 +603,15 @@ values taken from hashref values.  Example:
 
     db_insert 'users', { id => 1, name => "the.user" };
 
+A value can be a call to the exported C<sql()> function,
+in which case it is inserted verbatim into the generated
+SQL, for example:
+
+    db_insert 'users', {
+        id => sql("some_seq.nextval"),
+        name => "the.user"
+    };
+
 The function returns the number of insert operations performed.
 If any of the DBI insert operations fail, the function returns
 undef, and does not perform remaining inserts.
@@ -666,6 +692,10 @@ result limiting statements;
 
 =item *
 
+conditional statements;
+
+=item *
+
 statements with label syntax.
 
 =back
@@ -710,7 +740,7 @@ operators, and unary ! are all valid in the filters.
 Individual terms can refer to a table column using dereferencing
 syntax (either C<table-E<gt>column> or C<$tablevar-E<gt>column>),
 to an integer, floating point, or string constant, to a function
-call, or to a scalar value an outer scope (simple scalars,
+call, or to a scalar value in the outer scope (simple scalars,
 hash elements, or dereferenced hashref elements are supported).
 
 Function calls can take an arbitrary number of arguments.
@@ -726,13 +756,24 @@ syntax.  For example:
 The C<lc> and C<uc> builtin functions are translated to
 C<lower> and C<upper>, respectively.
 
+A special case is when C<sql()> function (with a single
+parameter) is called.  In this case the parameter of the
+function call inserted verbatim into the generated SQL,
+for example:
+
+    db_update {
+        tab->state eq "new";
+        tab->id = sql "some_seq.nextval";
+    };
+
+
 =head3 Return statements
 
 Return statements determine which columns are returned by
 a query under what names.
 Each element in the return statement can be either
-a reference to a table column, a reference to the whole
-table, or a string constant,
+a reference to the whole table, an expression involving
+table columns, or a string constant,
 in which case it is taken as an alias to
 the next element in the return statement:
 
@@ -812,6 +853,29 @@ is equivalent to
     OFFSET 5 LIMIT 16
 
 Result limiting statements are only valid in L</db_fetch {}>.
+
+=head3 Conditional statements
+
+There is a limited support for parse-time conditional expressions.
+
+At the query sub parsing stage, if the conditional does not mention
+any tables or columns, and refers exclusively to the values from the
+outer scope, it is evaluated, and the corresponding filter (or any other
+kind of statement) is only put into the generated SQL if the condition
+is true.
+
+For example,
+
+    my $type = "ICBM";
+    db_fetch {
+        my $p : products;
+        $p->type eq $type if $type;
+    };
+
+will generate the equivalent to C<select * from products where type = 'ICBM'>,
+while the same code would generate just C<select * from products> if C<$type>
+were false.
+
 
 =head3 Statements with label syntax
 
@@ -939,6 +1003,14 @@ Example:
     $db->query(sub { $u : users });
     print $db->sql, "\n";
 
+The C<sql()> sub can also be called in a procedural fashion,
+in which case it serves the purpose of injecting
+verbatim pieces of SQL into query subs
+(see L</Query filter statements>) or into the values
+to be inserted via L</db_insert>.
+
+The C<sql()> function is exported by default.
+
 =head3 bind_values()
 
 Takes no parameters.
@@ -950,6 +1022,33 @@ Example:
 
     $db->query(sub { users->name eq "john" });
     print join(", ", $db->bind_values), "\n";
+
+
+=head2 Database driver specifics
+
+The generated SQL output can differ depending on
+the particular database driver in use.
+
+=head3 MySQL
+
+Native MySQL regular expressions are used if possible and if
+a simple C<LIKE> won't suffice.
+
+=head3 Oracle
+
+The function call C<sysdate()> is transformed into C<sysdate>
+(without parentheses).
+
+=head3 Postgresql
+
+Native Postgresql regular expressions are used if possible and if
+a simple C<LIKE> won't suffice.
+
+=head3 SQLite
+
+Native Perl regular expressions are used with SQLite even for
+simple match cases, since SQLite does not know how to optimize
+C<LIKE> applied to an indexed column with a constant prefix.
 
 
 =head2 Implementation details and more ideology
@@ -1024,8 +1123,8 @@ query sub.
 Although variables closed over the query sub can be used
 in it, only simple scalars, hash elements, and dereferenced
 hasref elements are understood at the moment.
-Similarly, variable interpolation inside regular
-expressions is also not supported.
+Similarly, only simple scalar variables interpolation inside regular
+expressions is supported.
 
 If you would like to see something implemented,
 or find a nice Perlish syntax for some SQL feature,

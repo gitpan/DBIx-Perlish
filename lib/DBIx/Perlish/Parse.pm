@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.27 2007/02/09 11:31:57 tobez Exp $
+# $Id: Parse.pm,v 1.33 2007/02/13 14:56:44 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -364,17 +364,19 @@ sub parse_return_value
 {
 	my ($S, $op) = @_;
 
-	if (is_unop($op, "entersub")) {
-		my ($t, $f) = get_tab_field($S, $op);
-		return field => "$t.$f";
-	} elsif (is_op($op, "padsv")) {
+	if (is_op($op, "padsv")) {
 		return table => find_aliased_tab($S, $op);
 	} elsif (my $const = is_const($S, $op)) {
 		return alias => $const;
 	} elsif (is_op($op, "pushmark")) {
 		return ();
 	} else {
-		bailout $S, "error parsing return values";
+		my $saved_values = $S->{values};
+		$S->{values} = [];
+		my $ret = parse_term($S, $op);
+		push @{$S->{ret_values}}, @{$S->{values}};
+		$S->{values} = $saved_values;
+		return field => $ret;
 	}
 }
 
@@ -397,6 +399,9 @@ sub parse_term
 	} elsif (is_unop($op, "uc")) {
 		my $term = parse_term($S, $op->first);
 		return "upper($term)";
+	} elsif (is_unop($op, "abs")) {
+		my $term = parse_term($S, $op->first);
+		return "abs($term)";
 	} elsif (is_unop($op, "null")) {
 		return parse_term($S, $op->first, %p);
 	} elsif (is_unop($op, "not")) {
@@ -611,9 +616,18 @@ sub try_funcall
 			return unless is_svop($codeop, "anoncode");
 			my $sql = handle_subselect($S, $codeop, returns_dont_care => 1);
 			return "exists ($sql)";
+		} elsif ($func eq "sql") {
+			return unless @args == 1;
+			# XXX understand more complex expressions here
+			my $sql;
+			return unless $sql = is_const($S, $args[0]);
+			return $sql;
 		}
 
 		my @terms = map { parse_term($S, $_) } @args;
+		return "sysdate"
+			if ($S->{gen_args}->{flavor}||"") eq "Oracle" &&
+				lc $func eq "sysdate" && !@terms;
 		return "$func(" . join(", ", @terms) . ")";
 	}
 }
@@ -719,16 +733,58 @@ sub parse_entersub
 	return parse_term($S, $op);
 }
 
+sub parse_complex_regex
+{
+	my ( $S, $op) = @_;
+
+	if ( is_unop( $op)) {
+		return parse_complex_regex( $S, $op-> first);
+	} elsif ( is_binop( $op, 'concat')) {
+		$op = $op-> first;
+		return 
+			parse_complex_regex( $S, $op) . 
+			parse_complex_regex( $S, $op-> sibling)
+		;
+	} elsif ( is_svop( $op, 'const')) {
+		return want_const( $S, $op);
+	} elsif ( is_op( $op, 'padsv') or is_padop( $op, 'gvsv')) {
+		if (find_aliased_tab($S, $op)) {
+			bailout $S, "cannot use a table variable as a value";
+		}
+		my $gv = ref($op) eq 'B::PADOP';
+		my $ix = $gv ? $op-> padix : $op-> targ;
+		my $rx = ${ $S->{padlist}->[1]->ARRAYelt( $ix)->object_2svref };
+		bailout $S, "something bad happened: embedded regex scalar cannot be accessed" 
+			unless defined $rx;
+		if ( $gv) {
+			$rx = $$rx;
+			bailout $S, "something bad happened: embedded regex scalar cannot be accessed" 
+				unless defined $rx;
+		}
+		$rx =~ s/^\(\?\-\w*\:(.*)\)$/$1/; # (?-xism:moo) -> moo
+		return $rx;
+	} else {
+		bailout $S, "unsupported op " . ref($op) . '/' . $op->name; 
+	}
+}
+
 sub parse_regex
 {
 	my ( $S, $op, $neg) = @_;
 	my ( $like, $case) = ( $op->precomp, $op-> pmflags & B::PMf_FOLD);
 
+	unless ( defined $like) {
+		my $logop = $op-> first-> sibling;
+		bailout $S, "strange regex " . $op->name
+			unless $logop and is_logop( $logop, 'regcomp');
+		$like = parse_complex_regex( $S, $logop-> first);
+	}
+
 	my ($tab, $field) = get_tab_field($S, $op->first);
 
 	my $flavor = lc($S-> {gen_args}-> {flavor} || '');
 	my $what = 'like';
-	
+
 	my $can_like = $like =~ /^\^?[-\s\w]*\$?$/; # like that begins with non-% can use indexes
 	
 	if ( $flavor eq 'mysql') {
@@ -786,9 +842,9 @@ sub parse_regex
 		return ($neg ? "not " : "") . "$what(?, $tab.$field)";
 	} else {
 		# XXX is SQL-standard LIKE case-sensitive or not?
-		die "Don't know how to set case-insensitive flag for this DBI flavor"
+		bailout $S, "Don't know how to set case-insensitive flag for this DBI flavor"
 			if $case;
-		die "Regex too complex for implementation using LIKE keyword: $like"
+		bailout $S, "Regex too complex for implementation using LIKE keyword: $like"
 			if $like =~ /(?<!\\)[\[\]\(\)\{\}\?\|]/;
 LIKE:
 		$like =~ s/%/\\%/g;
@@ -832,6 +888,27 @@ sub parse_or
 		my $left  = parse_term($S, $op->first);
 		my $right = parse_term($S, $op->first->sibling);
 		return "$left or $right";
+	}
+}
+
+sub parse_and
+{
+	my ($S, $op) = @_;
+	if (my ($val, $ok) = get_value($S, $op->first, soft => 1)) {
+		if ($val) {
+			$op = $op->first->sibling;
+			# This strangeness is for suppressing () when parsing
+			# expr via parse_term.  There must be a better way.
+			if (is_binop($op) || $op->name eq "sassign") {
+				return parse_expr($S, $op);
+			} else {
+				return parse_term($S, $op);
+			}
+		} else {
+			return ();
+		}
+	} else {
+		bailout $S, "logical AND is not supported yet";
 	}
 }
 
@@ -985,6 +1062,9 @@ sub parse_op
 	} elsif (is_logop($op, "or")) {
 		my $or = parse_or($S, $op);
 		push @{$S->{where}}, $or if $or;
+	} elsif (is_logop($op, "and")) {
+		my $and = parse_and($S, $op);
+		push @{$S->{where}}, $and if $and;
 	} elsif (is_unop($op, "leavesub")) {
 		parse_op($S, $op->first);
 	} elsif (is_unop($op, "null")) {
@@ -1056,6 +1136,7 @@ sub init
 		values     => [],
 		sets       => [],
 		set_values => [],
+		ret_values => [],
 		order_by   => [],
 		group_by   => [],
 	};
