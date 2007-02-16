@@ -1,17 +1,19 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.38 2007/02/13 15:36:23 tobez Exp $
+# $Id: Perlish.pm,v 1.42 2007/02/16 09:28:19 tobez Exp $
 
 use 5.008;
 use warnings;
 use strict;
 use Carp;
 
-use vars qw($VERSION @EXPORT $SQL @BIND_VALUES);
+use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.14';
+$VERSION = '0.15';
 @EXPORT = qw(db_fetch db_update db_delete db_insert sql);
+@EXPORT_OK = qw(union intersect);
+%EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
 
 use DBIx::Perlish::Parse;
 use DBI::Const::GetInfoType;
@@ -20,6 +22,9 @@ sub db_fetch  (&) { DBIx::Perlish->fetch ($_[0]) }
 sub db_update (&) { DBIx::Perlish->update($_[0]) }
 sub db_delete (&) { DBIx::Perlish->delete($_[0]) }
 sub db_insert { DBIx::Perlish->insert(@_) }
+
+sub union (&) {}
+sub intersect (&) {}
 
 my $default_object;
 
@@ -148,7 +153,7 @@ sub insert
 	return scalar @rows;
 }
 
-sub sql {
+sub sql ($) {
 	my $self = shift;
 	if (ref $self && $self->isa("DBIx::Perlish")) {
 		$self->{sql};
@@ -205,20 +210,20 @@ sub gen_sql
 	die "no tables specified in $operation\n" unless keys %tabs;
 	$sql .= join ", ", map { $tabs{$_} } sort keys %tabs;
 
-	if ($S->{sets} && @{$S->{sets}}) {
-		$sql .= " set ";
-		$sql .= join ", ", @{$S->{sets}};
-	}
+	$S->{sets}     ||= [];
+	$S->{where}    ||= [];
+	$S->{group_by} ||= [];
+	$S->{order_by} ||= [];
+	my @sets     = grep { $_ ne "" } @{$S->{sets}};
+	my @where    = grep { $_ ne "" } @{$S->{where}};
+	my @group_by = grep { $_ ne "" } @{$S->{group_by}};
+	my @order_by = grep { $_ ne "" } @{$S->{order_by}};
 
-	if ($S->{where} && @{$S->{where}}) {
-		$sql .= " where " . join " and ", @{$S->{where}};
-	}
-	if (@{$S->{group_by}}) {
-		$sql .= " group by " . join ", ", @{$S->{group_by}};
-	}
-	if (@{$S->{order_by}}) {
-		$sql .= " order by " . join ", ", @{$S->{order_by}};
-	}
+	$sql .= " set "      . join ", ",    @sets     if @sets;
+	$sql .= " where "    . join " and ", @where    if @where;
+	$sql .= " group by " . join ", ",    @group_by if @group_by;
+	$sql .= " order by " . join ", ",    @order_by if @order_by;
+
 	if ($S->{limit}) {
 		$sql .= " limit $S->{limit}";
 	}
@@ -228,6 +233,12 @@ sub gen_sql
 	my $v = $S->{set_values} || [];
 	push @$v, @{$S->{ret_values} || []};
 	push @$v, @{$S->{values} || []};
+
+	for my $add (@{$S->{additions}}) {
+		$sql .= " $add->{type} $add->{sql}";
+		push @$v, @{$add->{vals}};
+	}
+
 	return ($sql, $v, $nret);
 }
 
@@ -242,7 +253,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.14
+This document describes DBIx::Perlish version 0.15
 
 
 =head1 SYNOPSIS
@@ -264,7 +275,7 @@ This document describes DBIx::Perlish version 0.14
     my @rows = db_fetch {
         my $x : users;
         $x->id <- db_fetch {
-            my $t2 : table;
+            my $t2 : table1;
             $t2->col == 2 || $t2->col == 3;
             return $t2->user_id;
         };
@@ -293,7 +304,7 @@ This document describes DBIx::Perlish version 0.14
 
     # deletes:
     db_delete {
-        my $t : table;
+        my $t : table1;
         !defined $t->age  or
         $t->age < 18;
     };
@@ -696,7 +707,11 @@ conditional statements;
 
 =item *
 
-statements with label syntax.
+statements with label syntax;
+
+=item *
+
+compound queries' statements.
 
 =back
 
@@ -735,10 +750,11 @@ only refer to a single table.
 Query filter statements have a general form of Perl expressions.
 Binary comparison operators, logical "or" (both high and lower
 precedence form), matching operators =~ and !~, binary arithmetic
-operators, and unary ! are all valid in the filters.
+operators, string concatenation,
+and unary ! are all valid in the filters.
 
 Individual terms can refer to a table column using dereferencing
-syntax (either C<table-E<gt>column> or C<$tablevar-E<gt>column>),
+syntax (either C<tablename-E<gt>column> or C<$tablevar-E<gt>column>),
 to an integer, floating point, or string constant, to a function
 call, or to a scalar value in the outer scope (simple scalars,
 hash elements, or dereferenced hashref elements are supported).
@@ -807,7 +823,7 @@ a table column on the left-hand side, and an expression
 like those accepted in filter statements on the right-hand
 side:
 
-    table->id = 42;
+    table1->id = 42;
     $t->column = $t->column + 1;
 
 The bulk assignments must have a table specifier on the left-hand
@@ -823,12 +839,12 @@ assignments:
 
 or
 
-    table() = {
+    tablename() = {
         id     => 42,
-        column => table->column + 1
+        column => tablename->column + 1
     };
 
-Please note a certain ugliness in C<table()> in the last example,
+Please note a certain ugliness in C<tablename()> in the last example,
 so it is probably better to either use table vars, or stick to the
 single assignment syntax of the first example.
 
@@ -916,7 +932,7 @@ hand side of the assignment is taken to be the name of the table:
 
     my $data = { table => "mytable" };
     db_fetch {
-        table: my $t = $data->{mytable};
+        table: my $t = $data->{table};
     };
 
 This is useful if you don't know the names of your table until
@@ -925,6 +941,34 @@ runtime.
 All special labels are case insensitive.
 
 Special labels are only valid in L</db_fetch {}>.
+
+
+=head3 Compound queries' statements
+
+The SQL compound queries UNION and INTERSECT are supported
+using the following syntax:
+
+    db_fetch {
+        {
+            ... normal query statements ...
+        }
+        compound-query-keyword
+        {
+            ... normal query statements ...
+        }
+    };
+
+Here I<compound-query-keyword> is one of C<union> and
+C<intersect>.
+
+This feature will only work if the C<use> statement for
+the C<DBIx::Perlish> module was written with C<:all>
+export declaration, since C<union> and C<intersect>
+are subs not exported by default by the module.
+
+It is the responsibility of the programmer to make sure
+that results of the individual queries used in a compound
+query are compatible with each other.
 
 
 =head3 Subqueries
@@ -939,7 +983,7 @@ This variant corresponds to the C<EXISTS (SELECT ...)> SQL
 construct, for example:
 
     db_delete {
-        my $t : table;
+        my $t : table1;
         db_fetch {
             $t->id == table2->table_id;
         };
@@ -952,7 +996,7 @@ its values from whatever is returned by a L</db_fetch {}> on
 the right:
 
     db_delete {
-        my $t : table;
+        my $t : table1;
         $t->id  <-  db_fetch {
             return table2->table_id;
         };
