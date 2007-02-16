@@ -1,6 +1,6 @@
 use warnings;
 use strict;
-use Test::More tests => 94;
+use Test::More tests => 130;
 use DBIx::Perlish qw/:all/;
 use t::test_utils;
 
@@ -296,7 +296,7 @@ test_select_sql {
 test_select_sql {
 	return "foo-" . tab->name . "-moo";
 } "concatenation in return",
-"select ((? || t01.name) || ?) from tab t01",
+"select (? || t01.name || ?) from tab t01",
 ["foo-","-moo"];
 
 test_select_sql {
@@ -305,3 +305,70 @@ test_select_sql {
 } "concatenation in filter",
 "select t01.name from tab t01 where (t01.name || ?) = ?",
 ["x","abcx"];
+
+test_select_sql {
+	my $t : tab;
+	return "foo-$t->name-moo";
+} "concatenation with interpolation",
+"select (? || t01.name || ?) from tab t01",
+["foo-", "-moo"];
+
+test_select_sql {
+	my $t : tab;
+	return "foo-" . $t->firstname . " $t->lastname-moo";
+} "concat, interp+normal",
+"select (? || t01.firstname || ? || t01.lastname || ?) from tab t01",
+["foo-", " ", "-moo"];
+
+test_select_sql {
+	my $t : tab;
+	return "foo-$t->firstname $t->lastname-moo";
+} "concat, interp x 2",
+"select (? || t01.firstname || ? || t01.lastname || ?) from tab t01",
+["foo-", " ", "-moo"];
+
+test_select_sql {
+	my $t : tab;
+	return "abc$t->{name}xyz";
+} "concat, interp, hash syntax",
+"select (? || t01.name || ?) from tab t01",
+["abc", "xyz"];
+
+# defined
+test_select_sql {
+	defined(tab->field);
+} "defined",
+"select * from tab t01 where t01.field is not null",
+[];
+
+test_select_sql {
+	defined tab->field;
+} "defined",
+"select * from tab t01 where t01.field is not null",
+[];
+
+test_select_sql {
+	!defined(tab->field);
+} "!defined",
+"select * from tab t01 where t01.field is null",
+[];
+
+test_select_sql {
+	not defined(tab->field);
+} "not defined",
+"select * from tab t01 where t01.field is null",
+[];
+
+# <- @array
+my @ary = (1,2,3);
+test_select_sql {
+	tab->id  <-  @ary;
+} "in array",
+"select * from tab t01 where t01.id in (?,?,?)",
+[@ary];
+
+test_select_sql {
+	!tab->id  <-  @ary;
+} "in array",
+"select * from tab t01 where t01.id not in (?,?,?)",
+[@ary];

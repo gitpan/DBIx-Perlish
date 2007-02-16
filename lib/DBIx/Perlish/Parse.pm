@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.36 2007/02/16 09:28:19 tobez Exp $
+# $Id: Parse.pm,v 1.41 2007/02/16 20:49:28 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -221,7 +221,7 @@ sub find_aliased_tab
 
 sub get_tab_field
 {
-	my ($S, $unop, $expect_lvalue) = @_;
+	my ($S, $unop, %p) = @_;
 	my $op = want_unop($S, $unop, "entersub");
 	want_op($S, $op, "pushmark");
 	$op = $op->sibling;
@@ -237,7 +237,7 @@ sub get_tab_field
 	$op = $op->sibling;
 	my $field = want_method($S, $op);
 	$op = $op->sibling;
-	if ($expect_lvalue) {
+	if ($p{lvalue}) {
 		want_unop($S, $op, "rv2cv");
 		$op = $op->sibling;
 	}
@@ -405,18 +405,27 @@ sub parse_term
 		return "abs($term)";
 	} elsif (is_unop($op, "null")) {
 		return parse_term($S, $op->first, %p);
+	} elsif (is_op($op, "null")) {
+		return parse_term($S, $op->sibling, %p);
 	} elsif (is_unop($op, "not")) {
 		my $subop = $op-> first;
 		if (ref($subop) eq "B::PMOP" && $subop->name eq "match") {
 			return parse_regex( $S, $subop, 1);
 		} else {
-			my $term = parse_term($S, $subop);
+			my ($term, $with_not) = parse_term($S, $subop);
 			if ($p{not_after}) {
 				return "$term not";
+			} elsif ($with_not) {
+				return $with_not;
 			} else {
 				return "not $term";
 			}
 		}
+	} elsif (is_unop($op, "defined")) {
+		my $term = parse_term($S, $op->first);
+		return wantarray ?
+			("$term is not null", "$term is null") :
+			"$term is not null";
 	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
 		push @{$S->{values}}, $val;
 		return "?";
@@ -487,32 +496,44 @@ sub get_gv
 sub try_parse_subselect
 {
 	my ($S, $sop) = @_;
+	my $sql;
+	my @vals;
+
 	my $sub = $sop->last->first;
-	return unless is_unop($sub, "entersub");
-	$sub = $sub->first if is_unop($sub->first, "null");
-	return unless is_op($sub->first, "pushmark");
 
-	my $rg = $sub->first->sibling;
-	return if is_null($rg);
-	my $dbfetch = $rg->sibling;
-	return if is_null($dbfetch);
-	return unless is_null($dbfetch->sibling);
+	if (is_op($sub, "padav")) {
+		my $ary = $S->{padlist}->[1]->ARRAYelt($sub->targ)->object_2svref;
+		bailout $S, "empty array in not valid in \"<-\"" unless @$ary;
+		$sql = join ",", ("?") x @$ary;
+		@vals = @$ary;
+	} else {
+		return unless is_unop($sub, "entersub");
+		$sub = $sub->first if is_unop($sub->first, "null");
+		return unless is_op($sub->first, "pushmark");
 
-	return unless is_unop($rg, "refgen");
-	$rg = $rg->first if is_unop($rg->first, "null");
-	return unless is_op($rg->first, "pushmark");
-	my $codeop = $rg->first->sibling;
-	return unless is_svop($codeop, "anoncode");
+		my $rg = $sub->first->sibling;
+		return if is_null($rg);
+		my $dbfetch = $rg->sibling;
+		return if is_null($dbfetch);
+		return unless is_null($dbfetch->sibling);
 
-	$dbfetch = $dbfetch->first if is_unop($dbfetch->first, "null");
-	$dbfetch = $dbfetch->first;
-	my $gv = get_gv($S, $dbfetch);
-	return unless $gv;
-	return unless $gv->NAME eq "db_fetch";
+		return unless is_unop($rg, "refgen");
+		$rg = $rg->first if is_unop($rg->first, "null");
+		return unless is_op($rg->first, "pushmark");
+		my $codeop = $rg->first->sibling;
+		return unless is_svop($codeop, "anoncode");
 
-	my $sql = handle_subselect($S, $codeop);
+		$dbfetch = $dbfetch->first if is_unop($dbfetch->first, "null");
+		$dbfetch = $dbfetch->first;
+		my $gv = get_gv($S, $dbfetch);
+		return unless $gv;
+		return unless $gv->NAME eq "db_fetch";
+
+		$sql = handle_subselect($S, $codeop);
+	}
 
 	my $left = parse_term($S, $sop->first, not_after => 1);
+	push @{$S->{values}}, @vals;
 	return "$left in ($sql)";
 }
 
@@ -572,7 +593,7 @@ sub parse_simple_assign
 {
 	my ($S, $op) = @_;
 
-	my ($tab, $f) = get_tab_field($S, $op->last, "lvalue");
+	my ($tab, $f) = get_tab_field($S, $op->last, lvalue => 1);
 	my $saved_values = $S->{values};
 	$S->{values} = [];
 	my $set = parse_term($S, $op->first);
@@ -644,7 +665,7 @@ sub try_funcall
 			return $sql;
 		}
 
-		my @terms = map { parse_term($S, $_) } @args;
+		my @terms = map { scalar parse_term($S, $_) } @args;
 		return "sysdate"
 			if ($S->{gen_args}->{flavor}||"") eq "Oracle" &&
 				lc $func eq "sysdate" && !@terms;
@@ -724,6 +745,13 @@ sub parse_expr
 {
 	my ($S, $op) = @_;
 	my $sqlop;
+	if (is_binop($op, "concat")) {
+		my ($c, $v) = try_special_concat($S, $op);
+		if ($c) {
+			push @{$S->{values}}, @$v;
+			return $c;
+		}
+	}
 	if ($sqlop = $binop_map{$op->name}) {
 		my $left = parse_term($S, $op->first);
 		my $right = parse_term($S, $op->last);
@@ -746,12 +774,103 @@ sub parse_expr
 	}
 }
 
+sub try_special_concat
+{
+	my ($S, $op, $no_processing) = @_;
+	my @terms;
+	my $str;
+	if (is_binop($op, "concat")) {
+		my @t = try_special_concat($S, $op->first, "don't process");
+		return () unless @t;
+		push @terms, @t;
+		@t = try_special_concat($S, $op->last, "don't process");
+		return () unless @t;
+		push @terms, @t;
+	} elsif (($str = is_const($S, $op))) {
+		push @terms, {str => $str};
+	} elsif (is_unop($op, "null")) {
+		$op = $op->first;
+		while (!is_null($op)) {
+			my @t = try_special_concat($S, $op, "don't process");
+			return () unless @t;
+			push @terms, @t;
+			$op = $op->sibling;
+		}
+	} elsif (is_op($op, "null")) {
+		return {skip => 1};
+	} elsif (is_binop($op, "helem")) {
+		my $f = is_const($S, $op->last);
+		return () unless $f;
+		$op = $op->first;
+		return () unless is_unop($op, "rv2hv");
+		$op = $op->first;
+		return () unless is_op($op, "padsv");
+		my $tab = find_aliased_tab($S, $op);
+		return () unless $tab;
+		push @terms, {tab => $tab, field => $f};
+	} elsif (is_unop($op, "entersub")) {
+		my ($t, $f) = eval { get_tab_field($S, $op) };
+		return () unless $f;
+		push @terms, {tab => $t, field => $f};
+	} elsif (is_op($op, "padsv")) {
+		my $tab = find_aliased_tab($S, $op);
+		return () unless $tab;
+		push @terms, {tab => $tab};
+	} else {
+		return ();
+	}
+	return @terms if $no_processing;
+	$str = "";
+	my @sql;
+	my @v;
+	@terms = grep { !$_->{skip} } @terms;
+	while (@terms) {
+		my $t = shift @terms;
+		if ($t->{str}) {
+			$str .= $t->{str};
+		} elsif ($t->{field}) {
+			if ($str) {
+				push @v, $str;
+				push @sql, '?';
+			}
+			if ($S->{operation} eq "delete" || $S->{operation} eq "update") {
+				push @sql, $t->{field};
+			} else {
+				push @sql, "$t->{tab}.$t->{field}";
+			}
+			$str = "";
+		} else {
+			my $t2 = shift @terms;
+			return () unless $t2;
+			return () unless $t2->{str};
+			return () unless $t2->{str} =~ s/^->(\w+)//;
+			my $f = $1;
+			if ($str) {
+				push @v, $str;
+				push @sql, '?';
+			}
+			if ($S->{operation} eq "delete" || $S->{operation} eq "update") {
+				push @sql, $f;
+			} else {
+				push @sql, "$t->{tab}.$f";
+			}
+			$str = $t2->{str};
+		}
+	}
+	if ($str) {
+		push @v, $str;
+		push @sql, '?';
+	}
+	my $sql = join " || ", @sql;
+	return ($sql, \@v);
+}
+
 sub parse_entersub
 {
 	my ($S, $op) = @_;
 	my $tab = try_parse_attr_assignment($S, $op);
 	return () if $tab;
-	return parse_term($S, $op);
+	return scalar parse_term($S, $op);
 }
 
 sub parse_complex_regex
@@ -923,7 +1042,7 @@ sub parse_and
 			if (is_binop($op) || $op->name eq "sassign") {
 				return parse_expr($S, $op);
 			} else {
-				return parse_term($S, $op);
+				return scalar parse_term($S, $op);
 			}
 		} else {
 			return ();
@@ -1084,7 +1203,7 @@ sub parse_op
 	} elsif (is_binop($op)) {
 		push @{$S->{where}}, parse_expr($S, $op);
 	} elsif (is_unop($op, "not")) {
-		push @{$S->{where}}, parse_term($S, $op);
+		push @{$S->{where}}, scalar parse_term($S, $op);
 	} elsif (is_logop($op, "or")) {
 		my $or = parse_or($S, $op);
 		push @{$S->{where}}, $or if $or;
@@ -1095,6 +1214,8 @@ sub parse_op
 		parse_op($S, $op->first);
 	} elsif (is_unop($op, "null")) {
 		parse_op($S, $op->first);
+	} elsif (is_unop($op, "defined")) {
+		push @{$S->{where}}, scalar parse_term($S, $op);
 	} elsif (is_op($op, "padsv")) {
 		# XXX Skip for now, it is either a variable
 		# that does not represent a table, or else

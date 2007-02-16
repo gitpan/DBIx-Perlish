@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.42 2007/02/16 09:28:19 tobez Exp $
+# $Id: Perlish.pm,v 1.49 2007/02/16 20:53:29 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.15';
+$VERSION = '0.16';
 @EXPORT = qw(db_fetch db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -253,7 +253,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.15
+This document describes DBIx::Perlish version 0.16
 
 
 =head1 SYNOPSIS
@@ -267,7 +267,7 @@ This document describes DBIx::Perlish version 0.15
     # selects:
     my @rows = db_fetch {
         my $x : users;
-        $x->id != 0;
+        defined $x->id;
         $x->name !~ /\@/;
     };
 
@@ -636,6 +636,20 @@ the function might throw any of the exceptions thrown by DBI.
 The C<db_insert {}> function is exported by default.
 
 
+=head3 union()
+
+This is a helper sub which is meant to be used inside
+query subs.  Please see L</Compound queries' statements>
+for details.  The C<union()> can be exported via C<:all>
+import declaration.
+
+=head3 intersect()
+
+This is a helper sub which is meant to be used inside
+query subs.  Please see L</Compound queries' statements>
+for details.  The C<intersect()> can be exported via C<:all>
+import declaration.
+
 =head3 $SQL and @BIND_VALUES
 
 The C<DBIx::Perlish> module provides two global variables
@@ -750,14 +764,45 @@ only refer to a single table.
 Query filter statements have a general form of Perl expressions.
 Binary comparison operators, logical "or" (both high and lower
 precedence form), matching operators =~ and !~, binary arithmetic
-operators, string concatenation,
+operators, string concatenation, defined(expr),
 and unary ! are all valid in the filters.
+There is also a special back-arrow, "comes from" C<E<lt>-> binary
+operator used for matching a column to a set of values, and for
+subqueries.
 
 Individual terms can refer to a table column using dereferencing
 syntax (either C<tablename-E<gt>column> or C<$tablevar-E<gt>column>),
 to an integer, floating point, or string constant, to a function
 call, or to a scalar value in the outer scope (simple scalars,
 hash elements, or dereferenced hashref elements are supported).
+
+Inside constant strings, table column specifiers are interpolated;
+the result of such interpolation is represented as a sequence
+of explicit SQL concatenation operations.
+The variable interpolation syntax is somewhat different from
+normal Perl rules, which does not interpolate method calls.
+So it is perfectly legal to write
+
+    return "abc $t->name xyz";
+
+When it is impossible to distinguish between the column name
+and the following characters, the hash element syntax must be
+used instead:
+
+    return "abc$t->{name}xyz";
+
+Of course, one may want to avoid the trouble altogether and use explicit Perl
+concatenation in such cases:
+
+    return "abc" . $t->name . "xyz";
+
+Please note that specifying column names as hash elements
+is I<only> valid inside interpolated strings;  this may change
+in the future versions of the module.
+
+Please also note that column specifiers of
+C<tablename-E<gt>column> form cannot be embedded into strings;
+again, use explicit Perl concatenation in such cases.
 
 Function calls can take an arbitrary number of arguments.
 Each argument to a function must currently be a term,
@@ -781,6 +826,20 @@ for example:
         tab->state eq "new";
         tab->id = sql "some_seq.nextval";
     };
+
+The "comes from" C<E<lt>-> binary operator can be used in the
+following manner:
+
+    my @ary = (1,2,3);
+    db_fetch {
+        tab->id  <-  @ary;
+    };
+
+This is equivalent to SQL's C<IN I<list>> operator, where
+the list comes from the C<@ary> array.
+
+The C<E<lt>-> operator can also be used with L</Subqueries>,
+below.
 
 
 =head3 Return statements
@@ -990,7 +1049,8 @@ construct, for example:
     };
 
 Another variant corresponds to the C<column IN (SELECT ...)> SQL
-construct.  It uses a special syntax with back-arrow C<E<lt>->,
+construct.  It uses a special syntax with back-arrow C<E<lt>->
+(read it as "comes from"),
 which signifies that the column specifier on the left gets
 its values from whatever is returned by a L</db_fetch {}> on
 the right:
@@ -1188,6 +1248,15 @@ and Phil Regnauld
 for discussions, suggestions and code contributions.
 
 This work is in part sponsored by Telia Denmark.
+
+
+=head1 SUPPORT
+
+There is a project Wiki at
+  http://dbix-perlish.tobez.org/wiki/
+
+There is also the project website at
+  http://dbix-perlish.tobez.org/
 
 
 =head1 LICENSE AND COPYRIGHT
