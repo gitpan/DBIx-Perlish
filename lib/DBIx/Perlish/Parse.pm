@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.42 2007/02/20 09:29:50 tobez Exp $
+# $Id: Parse.pm,v 1.47 2007/02/21 18:59:16 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -176,7 +176,7 @@ sub get_value
 		$val = $vv->{$key};
 	} else {
 		return () if $p{soft};
-		bailout $S, "cannot parse this as a value or value reference";
+		bailout $S, "cannot parse \"", $op->name, "\" op as a value or value reference";
 	}
 	return ($val, 1);
 }
@@ -414,6 +414,8 @@ sub parse_term
 		return parse_term($S, $op->first, %p);
 	} elsif (is_op($op, "null")) {
 		return parse_term($S, $op->sibling, %p);
+	} elsif (is_op($op, "undef")) {
+		return "null";
 	} elsif (is_unop($op, "not")) {
 		my $subop = $op-> first;
 		if (ref($subop) eq "B::PMOP" && $subop->name eq "match") {
@@ -434,8 +436,12 @@ sub parse_term
 			("$term is not null", "$term is null") :
 			"$term is not null";
 	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
-		push @{$S->{values}}, $val;
-		return "?";
+		if (defined $val) {
+			push @{$S->{values}}, $val;
+			return "?";
+		} else {
+			return "null";
+		}
 	} elsif (is_binop($op)) {
 		my $expr = parse_expr($S, $op);
 		return "($expr)";
@@ -500,6 +506,35 @@ sub get_gv
 	$gv;
 }
 
+sub try_get_dbfetch
+{
+	my ($S, $sub) = @_;
+		
+	return unless is_unop($sub, "entersub");
+	$sub = $sub->first if is_unop($sub->first, "null");
+	return unless is_op($sub->first, "pushmark");
+
+	my $rg = $sub->first->sibling;
+	return if is_null($rg);
+	my $dbfetch = $rg->sibling;
+	return if is_null($dbfetch);
+	return unless is_null($dbfetch->sibling);
+
+	return unless is_unop($rg, "refgen");
+	$rg = $rg->first if is_unop($rg->first, "null");
+	return unless is_op($rg->first, "pushmark");
+	my $codeop = $rg->first->sibling;
+	return unless is_svop($codeop, "anoncode");
+
+	$dbfetch = $dbfetch->first if is_unop($dbfetch->first, "null");
+	$dbfetch = $dbfetch->first;
+	my $gv = get_gv($S, $dbfetch);
+	return unless $gv;
+	return unless $gv->NAME eq "db_fetch";
+
+	return $codeop;
+}
+
 sub try_parse_subselect
 {
 	my ($S, $sop) = @_;
@@ -514,28 +549,8 @@ sub try_parse_subselect
 		$sql = join ",", ("?") x @$ary;
 		@vals = @$ary;
 	} else {
-		return unless is_unop($sub, "entersub");
-		$sub = $sub->first if is_unop($sub->first, "null");
-		return unless is_op($sub->first, "pushmark");
-
-		my $rg = $sub->first->sibling;
-		return if is_null($rg);
-		my $dbfetch = $rg->sibling;
-		return if is_null($dbfetch);
-		return unless is_null($dbfetch->sibling);
-
-		return unless is_unop($rg, "refgen");
-		$rg = $rg->first if is_unop($rg->first, "null");
-		return unless is_op($rg->first, "pushmark");
-		my $codeop = $rg->first->sibling;
-		return unless is_svop($codeop, "anoncode");
-
-		$dbfetch = $dbfetch->first if is_unop($dbfetch->first, "null");
-		$dbfetch = $dbfetch->first;
-		my $gv = get_gv($S, $dbfetch);
-		return unless $gv;
-		return unless $gv->NAME eq "db_fetch";
-
+		my $codeop = try_get_dbfetch( $S, $sub);
+		return unless $codeop;
 		$sql = handle_subselect($S, $codeop);
 	}
 
@@ -635,7 +650,7 @@ sub try_funcall
 		my $gv = get_gv($S, $op);
 		return unless $gv;
 		my $func = $gv->NAME;
-		if ($func =~ /^(db_fetch|union|intersect)$/) {
+		if ($func =~ /^(db_fetch|union|intersect|except)$/) {
 			return unless @args == 1;
 			my $rg = $args[0];
 			return unless is_unop($rg, "refgen");
@@ -771,7 +786,14 @@ sub parse_expr
 	if ($sqlop = $binop_map{$op->name}) {
 		my $left = parse_term($S, $op->first);
 		my $right = parse_term($S, $op->last);
-
+		if ($sqlop eq "=" || $sqlop eq "<>") {
+			my $not = $sqlop eq "<>" ? " not" : "";
+			if ($right eq "null") {
+				return "$left is$not null";
+			} elsif ($left eq "null") {
+				return "$right is$not null";
+			}
+		}
 		return "$left $sqlop $right";
 	} elsif ($op->name eq "lt") {
 		if (is_unop($op->last, "negate")) {
@@ -903,20 +925,7 @@ sub parse_complex_regex
 		;
 	} elsif ( is_svop( $op, 'const')) {
 		return want_const( $S, $op);
-	} elsif ( is_op( $op, 'padsv') or is_padop( $op, 'gvsv')) {
-		if (find_aliased_tab($S, $op)) {
-			bailout $S, "cannot use a table variable as a value";
-		}
-		my $gv = ref($op) eq 'B::PADOP';
-		my $ix = $gv ? $op-> padix : $op-> targ;
-		my $rx = ${ $S->{padlist}->[1]->ARRAYelt( $ix)->object_2svref };
-		bailout $S, "something bad happened: embedded regex scalar cannot be accessed" 
-			unless defined $rx;
-		if ( $gv) {
-			$rx = $$rx;
-			bailout $S, "something bad happened: embedded regex scalar cannot be accessed" 
-				unless defined $rx;
-		}
+	} elsif (my ($rx, $ok) = get_value($S, $op, soft => 1)) {
 		$rx =~ s/^\(\?\-\w*\:(.*)\)$/$1/; # (?-xism:moo) -> moo
 		return $rx;
 	} else {
@@ -1014,6 +1023,92 @@ LIKE:
 			"$what '$like'"
 		;
 	}
+}
+
+my %join_map = (
+	bit_and  => "inner",
+	multiply => "inner",
+	repeat   => "inner",
+	bit_or   => "full outer",
+	add      => "full outer",
+	lt       => "left outer",
+	gt       => "right outer",
+);
+
+sub parse_join
+{
+	my ($S, $op) = @_;
+	my @op = get_all_children( $op);
+
+
+	# allow 2-arg syntax for cross joins:
+	#    join $a * $b
+	# and 3-arg syntax for all other joins:
+	#    join $a * $b => db_fetch { ... }
+	bailout $S, "not a valid join() syntax"
+		unless 2 <= @op and 3 >= @op and
+			$op[0]-> name eq 'pushmark' and 
+			is_binop( $op[1]);
+	my $jointype;
+	if ( 2 == @op) {
+		bailout $S, "not a valid join() syntax: one of &,*,x is expected"
+			unless 
+				exists $join_map{ $op[1]-> name } and
+				$join_map{ $op[1]-> name } eq 'inner';
+		$jointype = 'cross';
+	} else {
+		bailout $S, "not a valid join() syntax: one of &,|,x,+,*,<,> is expected"
+			unless exists $join_map{ $op[1]-> name };
+		bailout $S, "not a valid join() syntax"
+			unless is_unop( $op[2]) and $op[2]-> name eq 'entersub';
+		$jointype = $join_map{ $op[1]-> name };
+	}
+
+	# table names
+	my @tab;
+	$tab[0] = find_aliased_tab($S, $op[1]-> first) or 
+		bailout $S, "first argument join() is not a table";
+	$tab[1] = find_aliased_tab($S, $op[1]-> last) or 
+		bailout $S, "second argument join() is not a table";
+	
+	# db_fetch
+	my ( $condition, $codeop);
+	if ( $op[2]) {
+		$codeop = try_get_dbfetch( $S, $op[2]);
+		bailout $S, "third argument to join is not a db_fetch expression"
+			unless $codeop;
+
+		my $cv = $codeop->sv;
+		if (!$$cv) {
+			$cv = $S->{padlist}->[1]->ARRAYelt($codeop->targ);
+		}
+		my $subref = $cv->object_2svref;
+		my $S2 = init( 
+			%{$S->{gen_args}}, 
+			operation => 'select',
+			prev_S    => $S,
+		);
+		$S2-> {alias} = $S-> {alias};
+		parse_sub($S2, $subref);
+		bailout $S, 
+			"join() db_fetch expression cannot contain anything ".
+			"but conditional expressions on already declared tables"
+				if scalar( grep { @{ $S2-> {$_} } } qw(
+					group_by order_by autogroup_by ret_values joins
+				)) or $S2->{alias} ne $S->{alias};
+
+		unless ( @{ $S2->{where}||[] }) {
+			bailout $S, 
+				"join() db_fetch expression must contain ".
+				"at least one conditional expression"
+					unless $jointype eq 'inner';
+			$jointype = 'cross';
+		} else {
+			$condition = join(' and ', @{ $S2-> {where} });
+		}
+	}
+
+	return [ $jointype, @tab, $condition ];
 }
 
 sub try_parse_range
@@ -1257,6 +1352,8 @@ sub parse_op
 		push @{$S->{where}}, parse_entersub($S, $op);
 	} elsif (ref($op) eq "B::PMOP" && $op->name eq "match") {
 		push @{$S->{where}}, parse_regex( $S, $op, 0);
+	} elsif ( $op-> name eq 'join') {
+		push @{$S->{joins}}, parse_join( $S, $op);
 	} else {
 		print "$op\n";
 		if (ref($op) eq "B::PMOP") {
@@ -1303,6 +1400,7 @@ sub init
 		order_by   => [],
 		group_by   => [],
 		additions  => [],
+		joins      => [],
 		aggregates => { avg => 1, count => 1, max => 1, min => 1, sum => 1 },
 		autogroup_by     => [],
 		autogroup_fields => {},

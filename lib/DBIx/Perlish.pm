@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.50 2007/02/20 09:29:49 tobez Exp $
+# $Id: Perlish.pm,v 1.54 2007/02/21 18:59:15 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,9 +10,9 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.17';
+$VERSION = '0.18';
 @EXPORT = qw(db_fetch db_update db_delete db_insert sql);
-@EXPORT_OK = qw(union intersect);
+@EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
 
 use DBIx::Perlish::Parse;
@@ -25,6 +25,7 @@ sub db_insert { DBIx::Perlish->insert(@_) }
 
 sub union (&) {}
 sub intersect (&) {}
+sub except (&) {}
 
 my $default_object;
 
@@ -194,7 +195,7 @@ sub gen_sql
 	} else {
 		die "unsupported operation: $operation\n";
 	}
-	my %tabs;
+	my (%tabs, %joins);
 	for my $var (keys %{$S->{vars}}) {
 		$tabs{$S->{var_alias}->{$var}} =
 			$no_aliases ?
@@ -208,6 +209,12 @@ sub gen_sql
 				"$tab $S->{tab_alias}->{$tab}";
 	}
 	die "no tables specified in $operation\n" unless keys %tabs;
+	for my $j ( @{$S->{joins}} ) {
+		my ( $join, $tab1, $tab2, $condition) = @$j;
+		$condition = ( defined $condition) ? " on $condition" : '';
+		$tabs{$tab1} = "$tabs{$tab1} $join join $tabs{$tab2}$condition";
+		delete $tabs{$tab2};
+	}
 	$sql .= join ", ", map { $tabs{$_} } sort keys %tabs;
 
 	$S->{sets}     ||= [];
@@ -256,10 +263,9 @@ __END__
 
 DBIx::Perlish - a perlish interface to SQL databases
 
-
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.17
+This document describes DBIx::Perlish version 0.18
 
 
 =head1 SYNOPSIS
@@ -656,6 +662,14 @@ query subs.  Please see L</Compound queries' statements>
 for details.  The C<intersect()> can be exported via C<:all>
 import declaration.
 
+=head3 except()
+
+This is a helper sub which is meant to be used inside
+query subs.  Please see L</Compound queries' statements>
+for details.  The C<except()> can be exported via C<:all>
+import declaration.
+
+
 =head3 $SQL and @BIND_VALUES
 
 The C<DBIx::Perlish> module provides two global variables
@@ -1032,7 +1046,7 @@ Special labels are only valid in L</db_fetch {}>.
 
 =head3 Compound queries' statements
 
-The SQL compound queries UNION and INTERSECT are supported
+The SQL compound queries UNION, INTERSECT, and EXCEPT are supported
 using the following syntax:
 
     db_fetch {
@@ -1045,13 +1059,13 @@ using the following syntax:
         }
     };
 
-Here I<compound-query-keyword> is one of C<union> and
-C<intersect>.
+Here I<compound-query-keyword> is one of C<union>,
+C<intersect>, or C<except>.
 
 This feature will only work if the C<use> statement for
 the C<DBIx::Perlish> module was written with C<:all>
-export declaration, since C<union> and C<intersect>
-are subs not exported by default by the module.
+export declaration, since C<union>, C<intersect>, and C<except>
+are subs that are not exported by default by the module.
 
 It is the responsibility of the programmer to make sure
 that results of the individual queries used in a compound
@@ -1094,6 +1108,48 @@ This variant puts a limitation on the return statement in the sub-query
 query sub.  Namely, it must contain a return statement with exactly one
 return value.
 
+=head3 Joins
+
+Joins are implemented similar to subqueries, using embedded C<db_fetch> call
+to specify a join condition. The join syntax is one of:
+
+    join $t1 BINARY_OP $t2;
+    join $t1 BINARY_OP $t2 => db_fetch { CONDITION };
+
+where CONDITION is an arbitrary expression using fields from C<$t1> and C<$t2>
+, and BINARY_OP is one of C<*>,C<+>,C<x>,C<&>,C<|>,C<< < >>,C<< > >> operators,
+which correspond to the following standard join types:
+
+=over
+
+=item Inner join
+
+This corresponds to either of C<*>, C<&>, and C<x> operators.
+The C<db_fetch {}> condition for inner join may be omitted,
+in which case it degenerates into a I<cross join>.
+
+=item Full outer join
+
+It is specified with C<+> or C<|>.
+The C<DBIx::Perlish> module does not care
+that some database engines do not support full outer join,
+nor does it try to work around this limitation.
+
+=item Left outer join
+
+C<< < >>
+
+=item Right outer join
+
+C<< > >>
+
+=back
+
+Example:
+
+    my $x : x;
+    my $y : y;
+    join $y * $x => db_fetch { $y-> id == $x-> id };
 
 =head2 Object-oriented interface
 
@@ -1139,7 +1195,7 @@ The C<sql()> sub can also be called in a procedural fashion,
 in which case it serves the purpose of injecting
 verbatim pieces of SQL into query subs
 (see L</Query filter statements>) or into the values
-to be inserted via L</db_insert>.
+to be inserted via L</db_insert()>.
 
 The C<sql()> function is exported by default.
 
@@ -1255,8 +1311,6 @@ query sub.
 Although variables closed over the query sub can be used
 in it, only simple scalars, hash elements, and dereferenced
 hasref elements are understood at the moment.
-Similarly, only simple scalar variables interpolation inside regular
-expressions is supported.
 
 If you would like to see something implemented,
 or find a nice Perlish syntax for some SQL feature,
@@ -1268,8 +1322,12 @@ Anton Berezin  C<< <tobez@tobez.org> >>
 
 =head1 ACKNOWLEDGEMENTS
 
-I would like to thank
-Dmitry Karasik,
+Special thanks to Dmitry Karasik,
+who contributed code and syntax ideas on several occasions,
+and with whom I spent considerable time discussing
+this module.
+
+I would also like to thank
 Henrik Andersen,
 Lars Thegler,
 and Phil Regnauld
