@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.47 2007/02/21 18:59:16 tobez Exp $
+# $Id: Parse.pm,v 1.56 2007/02/28 15:57:45 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -52,6 +52,7 @@ gen_is("op");
 gen_is("padop");
 gen_is("svop");
 gen_is("unop");
+gen_is("pmop");
 
 sub is_const
 {
@@ -109,7 +110,10 @@ sub want_const
 sub want_method
 {
 	my ($S, $op) = @_;
-	my $sv = want_svop($S, $op, "method_named");
+	unless (is_svop($op, "method_named")) {
+		bailout $S, "method call syntax expected";
+	}
+	my $sv = $op->sv;
 	if (!$$sv) {
 		$sv = $S->{padlist}->[1]->ARRAYelt($op->targ);
 	}
@@ -136,7 +140,7 @@ sub padname
 	my ($S, $op, %p) = @_;
 
 	my $padname = $S->{padlist}->[0]->ARRAYelt($op->targ);
-	if ($padname && ref($padname) ne "B::SPECIAL") {
+	if ($padname && !$padname->isa("B::SPECIAL")) {
 		return if $p{no_fakes} && $padname->FLAGS & B::SVf_FAKE;
 		return "my " . $padname->PVX;
 	} else {
@@ -418,7 +422,7 @@ sub parse_term
 		return "null";
 	} elsif (is_unop($op, "not")) {
 		my $subop = $op-> first;
-		if (ref($subop) eq "B::PMOP" && $subop->name eq "match") {
+		if (is_pmop($subop, "match")) {
 			return parse_regex( $S, $subop, 1);
 		} else {
 			my ($term, $with_not) = parse_term($S, $subop);
@@ -451,7 +455,9 @@ sub parse_term
 			unless $or;
 		return "($or)";
 	} elsif (my ($const,$sv) = is_const($S, $op)) {
-		if (ref $sv eq "B::IV" || ref $sv eq "B::NV") {
+		if (($sv->isa("B::IV") && !$sv->isa("B::PVIV")) ||
+			($sv->isa("B::NV") && !$sv->isa("B::PVNV")))
+		{
 			# This is surely a number, so we can
 			# safely inline it in the SQL.
 			return $const;
@@ -502,7 +508,7 @@ sub get_gv
 	if (!$gv || !$$gv) {
 		$gv = $S->{padlist}->[1]->ARRAYelt($gv_idx);
 	}
-	return unless ref $gv eq "B::GV";
+	return unless $gv->isa("B::GV");
 	$gv;
 }
 
@@ -530,7 +536,7 @@ sub try_get_dbfetch
 	$dbfetch = $dbfetch->first;
 	my $gv = get_gv($S, $dbfetch);
 	return unless $gv;
-	return unless $gv->NAME eq "db_fetch";
+	return unless $gv->NAME =~ /^(db_fetch|db_select)$/;
 
 	return $codeop;
 }
@@ -548,6 +554,35 @@ sub try_parse_subselect
 		bailout $S, "empty array in not valid in \"<-\"" unless @$ary;
 		$sql = join ",", ("?") x @$ary;
 		@vals = @$ary;
+	} elsif (is_unop($sub, "rv2av") && is_op($sub->first, "padsv")) {
+		my $ary = $S->{padlist}->[1]->ARRAYelt($sub->first->targ)->object_2svref;
+		bailout $S, "empty array in not valid in \"<-\"" unless @$$ary;
+		$sql = join ",", ("?") x @$$ary;
+		@vals = @$$ary;
+	} elsif (is_unop($sub, "srefgen") &&
+			 is_unop($sub->first, "null") &&
+			 is_listop($sub->first->first, "anonlist"))
+	{
+		my @what;
+		for my $v (get_all_children($sub->first->first)) {
+			next if is_op($v, "pushmark");
+			if (my ($const,$sv) = is_const($S, $v)) {
+				if (($sv->isa("B::IV") && !$sv->isa("B::PVIV")) ||
+					($sv->isa("B::NV") && !$sv->isa("B::PVNV")))
+				{
+					push @what, $const;
+				} else {
+					push @what, '?';
+					push @vals, $const;
+				}
+			} else {
+				my ($val, $ok) = get_value($S, $v);
+				push @what, '?';
+				push @vals, $val;
+			}
+		}
+		bailout $S, "empty list in not valid in \"<-\"" unless @what;
+		$sql = join ",", @what;
 	} else {
 		my $codeop = try_get_dbfetch( $S, $sub);
 		return unless $codeop;
@@ -650,7 +685,7 @@ sub try_funcall
 		my $gv = get_gv($S, $op);
 		return unless $gv;
 		my $func = $gv->NAME;
-		if ($func =~ /^(db_fetch|union|intersect|except)$/) {
+		if ($func =~ /^(db_fetch|db_select|union|intersect|except)$/) {
 			return unless @args == 1;
 			my $rg = $args[0];
 			return unless is_unop($rg, "refgen");
@@ -658,7 +693,7 @@ sub try_funcall
 			return unless is_op($rg->first, "pushmark");
 			my $codeop = $rg->first->sibling;
 			return unless is_svop($codeop, "anoncode");
-			if ($func eq "db_fetch") {
+			if ($func =~ /^(db_fetch|db_select)$/) {
 				my $sql = handle_subselect($S, $codeop, returns_dont_care => 1);
 				return "exists ($sql)";
 			} else {
@@ -698,7 +733,7 @@ sub try_funcall
 		}
 
 		return "sysdate"
-			if ($S->{gen_args}->{flavor}||"") eq "Oracle" &&
+			if ($S->{gen_args}->{flavor}||"") eq "oracle" &&
 				lc $func eq "sysdate" && !@terms;
 		return "$func(" . join(", ", @terms) . ")";
 	}
@@ -1050,6 +1085,16 @@ sub parse_join
 			$op[0]-> name eq 'pushmark' and 
 			is_binop( $op[1]);
 	my $jointype;
+		
+	if ($op[1]-> name eq 'le') {
+		# support <= as well as =>
+		bailout $S, "not a valid join() syntax"
+			unless @op == 2;
+		@op[1,2] = ( $op[1]-> first, $op[1]-> last);
+		bailout $S, "not a valid join() syntax"
+			unless is_binop( $op[1]);
+	}
+
 	if ( 2 == @op) {
 		bailout $S, "not a valid join() syntax: one of &,*,x is expected"
 			unless 
@@ -1273,7 +1318,7 @@ sub parse_labels
 			$const = ${$sv->object_2svref};
 		}
 		bailout $S, "label ", $lop->label, " must be followed by an integer or integer variable"
-			unless $sv && ref $sv eq "B::IV";
+			unless $sv && $sv->isa("B::IV");
 		$S->{$label->{key}} = $const;
 		$S->{skipnext} = 1;
 	} elsif ($label->{kind} eq "notice") {
@@ -1350,20 +1395,12 @@ sub parse_op
 		# skip
 	} elsif (is_unop($op, "entersub")) {
 		push @{$S->{where}}, parse_entersub($S, $op);
-	} elsif (ref($op) eq "B::PMOP" && $op->name eq "match") {
+	} elsif (is_pmop($op, "match")) {
 		push @{$S->{where}}, parse_regex( $S, $op, 0);
 	} elsif ( $op-> name eq 'join') {
 		push @{$S->{joins}}, parse_join( $S, $op);
 	} else {
-		print "$op\n";
-		if (ref($op) eq "B::PMOP") {
-			print "reg: ", $op->precomp, "\n";
-		}
-		print "type: ", $op->type, "\n";
-		print "name: ", $op->name, "\n";
-		print "desc: ", $op->desc, "\n";
-		print "targ: ", $op->targ, "\n";
-		bailout $S, "???";
+		bailout $S, "don't quite know what to do with op \"" . $op->name . "\"";
 	}
 }
 

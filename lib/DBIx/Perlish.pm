@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.54 2007/02/21 18:59:15 tobez Exp $
+# $Id: Perlish.pm,v 1.58 2007/02/28 15:57:45 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,8 +10,8 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.18';
-@EXPORT = qw(db_fetch db_update db_delete db_insert sql);
+$VERSION = '0.19';
+@EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
 
@@ -19,6 +19,7 @@ use DBIx::Perlish::Parse;
 use DBI::Const::GetInfoType;
 
 sub db_fetch  (&) { DBIx::Perlish->fetch ($_[0]) }
+sub db_select (&) { DBIx::Perlish->fetch ($_[0]) }
 sub db_update (&) { DBIx::Perlish->update($_[0]) }
 sub db_delete (&) { DBIx::Perlish->delete($_[0]) }
 sub db_insert { DBIx::Perlish->insert(@_) }
@@ -86,7 +87,7 @@ sub fetch
 	my $nret;
 	my $dbh = $me->{dbh} || get_dbh(3);
 	($me->{sql}, $me->{bind_values}, $nret) = gen_sql($sub, "select", 
-		flavor => $dbh-> get_info($GetInfoType{SQL_DBMS_NAME}),
+		flavor => lc $dbh->get_info($GetInfoType{SQL_DBMS_NAME}),
 		dbh    => $dbh,
 	);
 	$SQL = $me->{sql}; @BIND_VALUES = @{$me->{bind_values}};
@@ -107,7 +108,7 @@ sub update
 
 	my $dbh = $me->{dbh} || get_dbh(3);
 	($me->{sql}, $me->{bind_values}) = gen_sql($sub, "update",
-		flavor => $dbh-> get_info($GetInfoType{SQL_DBMS_NAME}),
+		flavor => lc $dbh->get_info($GetInfoType{SQL_DBMS_NAME}),
 		dbh    => $dbh,
 	);
 	$SQL = $me->{sql}; @BIND_VALUES = @{$me->{bind_values}};
@@ -121,7 +122,7 @@ sub delete
 
 	my $dbh = $me->{dbh} || get_dbh(3);
 	($me->{sql}, $me->{bind_values}) = gen_sql($sub, "delete",
-		flavor => $dbh-> get_info($GetInfoType{SQL_DBMS_NAME}),
+		flavor => lc $dbh->get_info($GetInfoType{SQL_DBMS_NAME}),
 		dbh    => $dbh,
 	);
 	$SQL = $me->{sql}; @BIND_VALUES = @{$me->{bind_values}};
@@ -265,7 +266,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.18
+This document describes DBIx::Perlish version 0.19
 
 
 =head1 SYNOPSIS
@@ -504,6 +505,11 @@ Please see L</Query sub syntax> below for details of the
 syntax allowed in query subs.
 
 The C<db_fetch {}> function is exported by default.
+
+=head3 db_select {}
+
+The C<db_select {}> function is an alias to the C<db_fetch {}>.
+It is exported by default.
 
 =head3 db_update {}
 
@@ -856,7 +862,9 @@ following manner:
     };
 
 This is equivalent to SQL's C<IN I<list>> operator, where
-the list comes from the C<@ary> array.
+the list comes from the C<@ary> array.  An array reference
+or an anonymous array can also be used in place of the C<@ary>
+here.
 
 The C<E<lt>-> operator can also be used with L</Subqueries>,
 below.
@@ -1110,11 +1118,13 @@ return value.
 
 =head3 Joins
 
-Joins are implemented similar to subqueries, using embedded C<db_fetch> call
-to specify a join condition. The join syntax is one of:
+Joins are implemented similar to subqueries, using embedded C<db_fetch> call to
+specify a join condition. The join syntax is one of (the last two are
+equivalent):
 
     join $t1 BINARY_OP $t2;
     join $t1 BINARY_OP $t2 => db_fetch { CONDITION };
+    join $t1 BINARY_OP $t2 <= db_fetch { CONDITION };
 
 where CONDITION is an arbitrary expression using fields from C<$t1> and C<$t2>
 , and BINARY_OP is one of C<*>,C<+>,C<x>,C<&>,C<|>,C<< < >>,C<< > >> operators,
