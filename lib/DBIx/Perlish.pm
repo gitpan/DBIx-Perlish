@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.58 2007/02/28 15:57:45 tobez Exp $
+# $Id: Perlish.pm,v 1.61 2007/03/06 11:25:25 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.19';
+$VERSION = '0.20';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -29,6 +29,19 @@ sub intersect (&) {}
 sub except (&) {}
 
 my $default_object;
+
+sub import
+{
+	my $pkg = caller;
+	local @EXPORT_OK = @EXPORT_OK;
+	local %EXPORT_TAGS = %EXPORT_TAGS;
+	if ($pkg && $pkg->can("except")) {
+		# XXX maybe check prototype here
+		pop @EXPORT_OK;
+		%EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
+	}
+	DBIx::Perlish->export_to_level(1, @_);
+}
 
 sub get_dbh
 {
@@ -266,7 +279,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.19
+This document describes DBIx::Perlish version 0.20
 
 
 =head1 SYNOPSIS
@@ -797,7 +810,11 @@ operator used for matching a column to a set of values, and for
 subqueries.
 
 Individual terms can refer to a table column using dereferencing
-syntax (either C<tablename-E<gt>column> or C<$tablevar-E<gt>column>),
+syntax
+(one of C<tablename-E<gt>column>,
+C<$tablevar-E<gt>column>,
+C<tablename-E<gt>$varcolumn>, or
+C<$tablevar-E<gt>$varcolumn>),
 to an integer, floating point, or string constant, to a function
 call, or to a scalar value in the outer scope (simple scalars,
 hash elements, or dereferenced hashref elements are supported).
