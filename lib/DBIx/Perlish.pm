@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.61 2007/03/06 11:25:25 tobez Exp $
+# $Id: Perlish.pm,v 1.63 2007/03/08 15:46:40 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.20';
+$VERSION = '0.21';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -279,7 +279,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.20
+This document describes DBIx::Perlish version 0.21
 
 
 =head1 SYNOPSIS
@@ -868,6 +868,14 @@ for example:
     db_update {
         tab->state eq "new";
         tab->id = sql "some_seq.nextval";
+    };
+
+There is also a shortcut when one can use backquotes for
+verbatim SQL pieces:
+
+    db_update {
+        tab->state eq "new";
+        tab->id = `some_seq.nextval`;
     };
 
 The "comes from" C<E<lt>-> binary operator can be used in the
