@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.63 2007/03/08 15:46:40 tobez Exp $
+# $Id: Perlish.pm,v 1.66 2007/03/20 11:14:45 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.21';
+$VERSION = '0.22';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -245,6 +245,7 @@ sub gen_sql
 	{
 		@group_by = grep { $_ ne "" } @{$S->{autogroup_by}};
 	}
+	die "nothing to update\n" if $operation eq "update" && !@sets;
 
 	$sql .= " set "      . join ", ",    @sets     if @sets;
 	$sql .= " where "    . join " and ", @where    if @where;
@@ -279,7 +280,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.21
+This document describes DBIx::Perlish version 0.22
 
 
 =head1 SYNOPSIS
@@ -817,7 +818,8 @@ C<tablename-E<gt>$varcolumn>, or
 C<$tablevar-E<gt>$varcolumn>),
 to an integer, floating point, or string constant, to a function
 call, or to a scalar value in the outer scope (simple scalars,
-hash elements, or dereferenced hashref elements are supported).
+hash elements, or dereferenced hashref elements chained to
+an arbitrary depth are supported).
 
 Inside constant strings, table column specifiers are interpolated;
 the result of such interpolation is represented as a sequence

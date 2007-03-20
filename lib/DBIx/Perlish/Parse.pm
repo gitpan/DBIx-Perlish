@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.60 2007/03/08 15:40:12 tobez Exp $
+# $Id: Parse.pm,v 1.61 2007/03/20 10:58:05 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -187,6 +187,9 @@ sub get_value
 				}
 				$vv = $S->{padlist}->[1]->ARRAYelt($op->targ)->object_2svref;
 				$vv = $$vv;
+			} elsif (is_binop($op, "helem")) {
+				my ($nv, $ok) = get_value($S, $op, %p);
+				$vv = $nv if $ok;
 			}
 		}
 		bailout $S, "unable to extract a value from a hash(ref)" unless $vv;
