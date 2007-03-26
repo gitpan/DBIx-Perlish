@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.66 2007/03/20 11:14:45 tobez Exp $
+# $Id: Perlish.pm,v 1.69 2007/03/26 21:46:51 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.22';
+$VERSION = '0.23';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -60,9 +60,14 @@ sub get_dbh
 			my $vars = PadWalker::peek_our($lvl);
 			$dbh = ${$vars->{'$dbh'}} if $vars->{'$dbh'};
 		}
+		unless ($dbh) {
+			my ($pkg) = caller($lvl-1);
+			no strict 'refs';
+			$dbh = ${"${pkg}::dbh"};
+		}
 	}
 	die "Database handle not set.  Maybe you forgot to call DBIx::Perlish::init()?\n" unless $dbh;
-	unless (ref $dbh && ref $dbh eq "DBI::db") { # XXX maybe relax for other things?
+	unless (UNIVERSAL::isa($dbh, "DBI::db")) { # XXX maybe relax for other things?
 		die "Invalid database handle found.\n";
 	}
 	$dbh;
@@ -280,7 +285,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.22
+This document describes DBIx::Perlish version 0.23
 
 
 =head1 SYNOPSIS
@@ -707,7 +712,8 @@ call C<init()> before issuing any of the C<db_query {}>,
 C<db_update {}>, C<db_delete {}> or C<db_insert {}>, those
 functions look for one special case before bailing out.
 
-Namely, they try to locate a variable C<my $dbh> or C<our $dbh>,
+Namely, they try to locate a variable C<my $dbh>, C<our $dbh>,
+or caller's package global C<$dbh>,
 in that order, in the scope in which they are used.  If such
 variable is found, and if it contains a valid C<DBI> database
 handler, they will use it for performing the actual query.
