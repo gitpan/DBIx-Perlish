@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.69 2007/03/26 21:46:51 tobez Exp $
+# $Id: Perlish.pm,v 1.73 2007/05/03 07:32:53 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.23';
+$VERSION = '0.24';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -285,7 +285,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.23
+This document describes DBIx::Perlish version 0.24
 
 
 =head1 SYNOPSIS
@@ -708,7 +708,7 @@ to be used with the corresponding SQL code.
 =head3 Special treatment of the C<$dbh> variable
 
 If the procedural interface is used, and the user did not
-call C<init()> before issuing any of the C<db_query {}>,
+call C<init()> before issuing any of the C<db_fetch {}>,
 C<db_update {}>, C<db_delete {}> or C<db_insert {}>, those
 functions look for one special case before bailing out.
 
@@ -968,6 +968,27 @@ Please note a certain ugliness in C<tablename()> in the last example,
 so it is probably better to either use table vars, or stick to the
 single assignment syntax of the first example.
 
+It is possible to intermix hashes and hashrefs dereferencings with
+verbatim key/value pairs in bulk assignments:
+
+    $t = {
+        id     => 42,
+        column => $t->column + 1,
+        %$hashref_from_outer_scope
+    };
+
+Please note that the right hand side of the bulk assignment must
+be an anonymouse hash reference.  Thus, the following is invalid:
+
+    $t = $hashref_from_outer_scope;
+
+Instead, write
+
+    $t = {%$hashref_from_outer_scope};
+
+The latter emphasizes the fact that this is the bulk assignment, which
+is not clear from the former statement.
+
 Assignment statements are only valid in L</db_update {}>.
 
 =head3 Result limiting statements
@@ -1055,7 +1076,7 @@ is not present in the query, the
 C<DBIx::Perlish> module will generate one automatically.
 For example, the following query:
 
-    db_query {
+    db_fetch {
         my $t : tab;
         return $t->name, $t->type, count($t->age);
     };
@@ -1127,7 +1148,7 @@ construct, for example:
     db_delete {
         my $t : table1;
         db_fetch {
-            $t->id == table2->table_id;
+            $t->id == table2->table1_id;
         };
     };
 
@@ -1141,7 +1162,7 @@ the right:
     db_delete {
         my $t : table1;
         $t->id  <-  db_fetch {
-            return table2->table_id;
+            return table2->table1_id;
         };
     };
 
