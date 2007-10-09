@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.68 2007/10/01 07:24:40 tobez Exp $
+# $Id: Parse.pm,v 1.69 2007/10/09 13:18:15 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -421,10 +421,15 @@ sub parse_return
 				push @{$S->{returns}}, $rv{field};
 			}
 		} elsif (exists $rv{alias}) {
+			if (defined $last_alias) {
+				# XXX maybe check whether it is a number and inline it?
+				push @{$S->{ret_values}}, $rv{alias};
+				push @{$S->{returns}}, "? as $last_alias";
+				undef $last_alias;
+				next;
+			}
 			bailout $S, "bad alias name \"$rv{alias}\""
 				unless $rv{alias} =~ /^\w+$/;
-			bailout $S, "cannot alias an alias"
-				if defined $last_alias;
 			if (lc $rv{alias} eq "distinct") {
 				bailout $S, "\"$rv{alias}\" is not a valid alias name" if @{$S->{returns}};
 				$S->{distinct}++;
