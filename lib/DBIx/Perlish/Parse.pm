@@ -1,10 +1,11 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.69 2007/10/09 13:18:15 tobez Exp $
+# $Id: Parse.pm,v 1.74 2007/10/16 11:49:37 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
 
 our $DEVEL;
+our $_cover;
 
 use B;
 use Carp;
@@ -527,9 +528,14 @@ sub parse_term
 		return "($expr)";
 	} elsif (is_logop($op, "or")) {
 		my $or = parse_or($S, $op);
-		bailout $S, "looks like a limiting range inside an expression\n"
+		bailout $S, "looks like a limiting range or a conditional inside an expression\n"
 			unless $or;
 		return "($or)";
+	} elsif (is_logop($op, "and")) {
+		my $and = parse_and($S, $op);
+		bailout $S, "looks like a conditional inside an expression\n"
+			unless $and;
+		return "($and)";
 	} elsif (my ($const,$sv) = is_const($S, $op)) {
 		if (($sv->isa("B::IV") && !$sv->isa("B::PVIV")) ||
 			($sv->isa("B::NV") && !$sv->isa("B::PVNV")))
@@ -1338,6 +1344,8 @@ sub parse_or
 		$S->{offset} = $from;
 		$S->{limit}  = $to-$from+1;
 		return;
+	} elsif (my ($val, $ok) = get_value($S, $op->first, soft => 1)) {
+		return compile_conditionally($S, $op, !$val);
 	} else {
 		my $left  = parse_term($S, $op->first);
 		my $right = parse_term($S, $op->first->sibling);
@@ -1349,20 +1357,32 @@ sub parse_and
 {
 	my ($S, $op) = @_;
 	if (my ($val, $ok) = get_value($S, $op->first, soft => 1)) {
-		if ($val) {
-			$op = $op->first->sibling;
-			# This strangeness is for suppressing () when parsing
-			# expr via parse_term.  There must be a better way.
-			if (is_binop($op) || $op->name eq "sassign") {
-				return parse_expr($S, $op);
-			} else {
-				return scalar parse_term($S, $op);
-			}
-		} else {
+		return compile_conditionally($S, $op, $val);
+	} else {
+		my $left  = parse_term($S, $op->first);
+		my $right = parse_term($S, $op->first->sibling);
+		return "$left and $right";
+	}
+}
+
+sub compile_conditionally
+{
+	my ($S, $op, $val) = @_;
+	if ($val) {
+		$op = $op->first->sibling;
+		# This strangeness is for suppressing () when parsing
+		# expr via parse_term.  There must be a better way.
+		if (is_binop($op) || $op->name eq "sassign") {
+			return parse_expr($S, $op);
+		} elsif (is_listop($op, "return")) {
+			# conditional returns are nice
+			parse_return($S, $op);
 			return ();
+		} else {
+			return scalar parse_term($S, $op);
 		}
 	} else {
-		bailout $S, "logical AND is not supported yet";
+		return ();
 	}
 }
 
@@ -1557,7 +1577,7 @@ sub parse_op
 		push @{$S->{where}}, scalar parse_term($S, $op);
 	} elsif (is_logop($op, "or")) {
 		my $or = parse_or($S, $op);
-		push @{$S->{where}}, $or if $or;
+		push @{$S->{where}}, "($or)" if $or;
 	} elsif (is_logop($op, "and")) {
 		my $and = parse_and($S, $op);
 		push @{$S->{where}}, $and if $and;
@@ -1580,6 +1600,7 @@ sub parse_op
 	} elsif (is_cop($op, "nextstate")) {
 		$S->{file} = $op->file;
 		$S->{line} = $op->line;
+		$_cover->($op);
 		if ($op->label) {
 			parse_labels($S, $op);
 		}
@@ -1637,6 +1658,7 @@ sub init
 		sets       => [],
 		set_values => [],
 		ret_values => [],
+		where      => [],
 		order_by   => [],
 		group_by   => [],
 		additions  => [],
@@ -1657,5 +1679,25 @@ $SIG{__WARN__} = sub {
 		warn(@_);
 	}
 };
+
+$_cover = sub {};
+if (*Devel::Cover::Files{HASH}) {
+	eval { require PadWalker; };
+	unless ($@) {
+		my $Seen = PadWalker::closed_over(\&Devel::Cover::deparse)->{'%Seen'};
+		if ($Seen) {
+			my $Coverage = Devel::Cover::coverage(0);
+			$_cover = sub {
+				my ($op) = @_;
+				Devel::Cover::get_location($op);
+				return unless $Devel::Cover::File;
+				return unless $Devel::Cover::Files{$Devel::Cover::File};
+				my $key = Devel::Cover::get_key($op);
+				$Coverage->{statement}{$key} ||= 1;
+				$Seen->{statement}{$$op}++;
+			};
+		}
+	}
+}
 
 1;
