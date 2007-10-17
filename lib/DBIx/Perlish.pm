@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.83 2007/10/16 12:32:47 tobez Exp $
+# $Id: Perlish.pm,v 1.87 2007/10/17 11:15:57 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.30';
+$VERSION = '0.31';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -39,6 +39,26 @@ sub import
 		# XXX maybe check prototype here
 		pop @EXPORT_OK;
 		%EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
+	}
+	if (@_ == 5) {
+		my %p = @_[1..4];
+		if ($p{prefix} && $p{prefix} =~ /^[a-zA-Z_]\w+$/ &&
+			$p{dbh} && ref $p{dbh} && ref $p{dbh} eq "SCALAR")
+		{
+			my $dbhref = $p{dbh};
+			my $o;
+			no strict 'refs';
+			*{$pkg."::$p{prefix}_fetch"} =
+			*{$pkg."::$p{prefix}_select"} =
+				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->fetch(@_) };
+			*{$pkg."::$p{prefix}_update"} =
+				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->update(@_) };
+			*{$pkg."::$p{prefix}_delete"} =
+				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->delete(@_) };
+			*{$pkg."::$p{prefix}_insert"} =
+				sub { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->insert(@_) };
+			return;
+		}
 	}
 	DBIx::Perlish->export_to_level(1, @_);
 }
@@ -290,7 +310,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.30
+This document describes DBIx::Perlish version 0.31
 
 
 =head1 SYNOPSIS
@@ -764,7 +784,7 @@ assignments;
 
 =item *
 
-result limiting statements;
+result limiting and ordering statements;
 
 =item *
 
@@ -1008,7 +1028,7 @@ is not clear from the former statement.
 
 Assignment statements are only valid in L</db_update {}>.
 
-=head3 Result limiting statements
+=head3 Result limiting and ordering statements
 
 The C<last> command can be used to limit the number of
 results returned by a fetch operation.
@@ -1026,7 +1046,29 @@ is equivalent to
 
     OFFSET 5 LIMIT 16
 
-Result limiting statements are only valid in L</db_fetch {}>.
+
+The C<sort> builtin can be used to specify the desired order
+of the results:
+
+    sort $t->col1, $t->col2;
+
+is equivalent to
+
+    ORDER BY col1, col2
+
+In order to support the ordering direction, the sort expressions
+can be preceded by a literal string which
+must satisfy the pattern /^(asc)/i (for ascending order,
+which is the default), or /^(desc)/i for descending order:
+
+    sort desc => $t->col1, asc => $t->col2;
+
+is equivalent to
+
+    ORDER BY col1 DESC, col2
+
+Result limiting and ordering statements are only valid in L</db_fetch {}>.
+
 
 =head3 Conditional statements
 
@@ -1304,6 +1346,65 @@ Example:
 
     $db->query(sub { users->name eq "john" });
     print join(", ", $db->bind_values), "\n";
+
+
+=head2 Working with multiple database handles
+
+There are several ways in which the C<DBIx::Perlish> module can be used
+with several different database handles within the same program:
+
+=over
+
+=item Using object-oriented interface
+
+The advantage of this approach is that there is no confusion
+about which database handle is in use, since a DBIx::Perlish object
+is always created with an explicit database handle as a parameter
+to L</new()>.
+
+The obvious disadvantage is that one has to explicitly use "sub"
+when specifying a query sub, so the syntax is unwieldy.
+
+=item Switching handles with L</init()>
+
+This will work, but it will add quite a bit of clutter to the
+code, especially if queries to multiple databases are intermixed
+with each other.
+
+=item Switching handles via manipulation of the C<$dbh> variable
+
+This has the same disadvantage as the previous method.  Besides,
+it looks like vodoo.
+
+=item Using special import syntax
+
+It is possible to import differently named specialized versions
+of the subs
+normally exported by the C<DBIx::Perlish> module, which will
+use specified database handle.  The syntax is as follows:
+
+    use DBIx::Perlish;
+    my $dbh = DBI->connect(...);
+
+    my $foo_dbh = DBI->connect(...);
+    use DBIx::Perlish prefix => "foo", dbh => \$foo_dbh;
+
+    my $bar_dbh = DBI->connect(...);
+    use DBIx::Perlish prefix => "bar", dbh => \$bar_dbh;
+
+    my @default =  db_fetch { ... };
+    my @foo     = foo_fetch { ... };
+    my @bar     = bar_fetch { ... };
+
+The syntax and semantics of such specialized versions is exactly
+the same as with the normal L</db_fetch {}>, L</db_select {}>,
+L</db_update {}>, L</db_delete {}>, and L</db_insert()>,
+except that they use the database handle specified in the C<use>
+statement for all operations.  As can be seen from the example above,
+the normal versions still work as intended, employing the usual mechanisms
+for determining which handle to use.
+
+=back
 
 
 =head2 Database driver specifics
