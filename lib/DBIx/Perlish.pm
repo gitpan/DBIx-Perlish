@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.87 2007/10/17 11:15:57 tobez Exp $
+# $Id: Perlish.pm,v 1.88 2007/11/06 09:09:39 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.31';
+$VERSION = '0.32';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -310,7 +310,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.31
+This document describes DBIx::Perlish version 0.32
 
 
 =head1 SYNOPSIS

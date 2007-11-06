@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.75 2007/10/17 10:34:54 tobez Exp $
+# $Id: Parse.pm,v 1.77 2007/11/06 09:09:39 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -1192,12 +1192,12 @@ sub parse_regex
 		if ($case) {
 			$what = "pre_i";
 			$S->{gen_args}->{dbh}->func($what, 2, sub {
-				return scalar $_[1] =~ /\Q$_[0]\E/i;
+				return scalar $_[1] =~ /$_[0]/i;
 			}, "create_function");
 		} else {
 			$what = "pre_n";
 			$S->{gen_args}->{dbh}->func($what, 2, sub {
-				return scalar $_[1] =~ /\Q$_[0]\E/;
+				return scalar $_[1] =~ /$_[0]/;
 			}, "create_function");
 		}
 		push @{$S->{values}}, $like;
@@ -1692,23 +1692,9 @@ $SIG{__WARN__} = sub {
 };
 
 $_cover = sub {};
-if (*Devel::Cover::Files{HASH}) {
-	eval { require PadWalker; };
-	unless ($@) {
-		my $Seen = PadWalker::closed_over(\&Devel::Cover::deparse)->{'%Seen'};
-		if ($Seen) {
-			my $Coverage = Devel::Cover::coverage(0);
-			$_cover = sub {
-				my ($op) = @_;
-				Devel::Cover::get_location($op);
-				return unless $Devel::Cover::File;
-				return unless $Devel::Cover::Files{$Devel::Cover::File};
-				my $key = Devel::Cover::get_key($op);
-				$Coverage->{statement}{$key} ||= 1;
-				$Seen->{statement}{$$op}++;
-			};
-		}
-	}
+if (*Devel::Cover::coverage{CODE}) {
+	my $Coverage = Devel::Cover::coverage(0);
+	$_cover = sub { $Coverage->{statement}{Devel::Cover::get_key($_[0])} ||= 1 };
 }
 
 1;
