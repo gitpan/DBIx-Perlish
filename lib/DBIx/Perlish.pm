@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.88 2007/11/06 09:09:39 tobez Exp $
+# $Id: Perlish.pm,v 1.91 2007/12/12 10:57:00 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.32';
+$VERSION = '0.33';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -42,8 +42,8 @@ sub import
 	}
 	if (@_ == 5) {
 		my %p = @_[1..4];
-		if ($p{prefix} && $p{prefix} =~ /^[a-zA-Z_]\w+$/ &&
-			$p{dbh} && ref $p{dbh} && ref $p{dbh} eq "SCALAR")
+		if ($p{prefix} && $p{prefix} =~ /^[a-zA-Z_]\w*$/ &&
+			$p{dbh} && ref $p{dbh} && (ref $p{dbh} eq "SCALAR" || ref $p{dbh} eq "REF"))
 		{
 			my $dbhref = $p{dbh};
 			my $o;
@@ -310,7 +310,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.32
+This document describes DBIx::Perlish version 0.33
 
 
 =head1 SYNOPSIS
