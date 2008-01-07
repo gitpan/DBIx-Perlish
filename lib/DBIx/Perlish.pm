@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.91 2007/12/12 10:57:00 tobez Exp $
+# $Id: Perlish.pm,v 1.93 2008/01/07 16:22:19 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.33';
+$VERSION = '0.34';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -209,7 +209,8 @@ sub gen_sql
 
 	my $S = DBIx::Perlish::Parse::init(%args, operation => $operation);
 	DBIx::Perlish::Parse::parse_sub($S, $sub);
-	my $sql;
+	my $sql = "";
+	my $next_bit = "";
 	my $nret = 9999;
 	my $no_aliases;
 	if ($operation eq "select") {
@@ -224,13 +225,13 @@ sub gen_sql
 		} else {
 			$sql .= "*";
 		}
-		$sql .= " from ";
+		$next_bit = " from ";
 	} elsif ($operation eq "delete") {
 		$no_aliases = 1;
-		$sql = "delete from ";
+		$next_bit = "delete from ";
 	} elsif ($operation eq "update") {
 		$no_aliases = 1;
-		$sql = "update ";
+		$next_bit = "update ";
 	} else {
 		die "unsupported operation: $operation\n";
 	}
@@ -248,15 +249,17 @@ sub gen_sql
 				"$tab $S->{tab_alias}->{$tab}";
 	}
 	unless (keys %tabs) {
-		if ($operation eq "select" &&
-			$args{flavor} && $args{flavor} eq "oracle" &&
-			$S->{returns})
-		{
-			$tabs{dual} = "dual";
+		if ($operation eq "select" && $S->{returns}) {
+			if ($args{flavor} && $args{flavor} eq "oracle") {
+				$tabs{dual} = "dual";
+			} else {
+				$next_bit = " ";
+			}
 		} else {
 			die "no tables specified in $operation\n";
 		}
 	}
+	$sql .= $next_bit;
 	for my $j ( @{$S->{joins}} ) {
 		my ( $join, $tab1, $tab2, $condition) = @$j;
 		$condition = ( defined $condition) ? " on $condition" : '';
@@ -296,6 +299,7 @@ sub gen_sql
 		$sql .= " $add->{type} $add->{sql}";
 		push @$v, @{$add->{vals}};
 	}
+	$sql =~ s/\s+$//;
 
 	return ($sql, $v, $nret);
 }
@@ -310,7 +314,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.33
+This document describes DBIx::Perlish version 0.34
 
 
 =head1 SYNOPSIS
@@ -860,7 +864,8 @@ C<$tablevar-E<gt>column>,
 C<tablename-E<gt>$varcolumn>, or
 C<$tablevar-E<gt>$varcolumn>),
 to an integer, floating point, or string constant, to a function
-call, or to a scalar value in the outer scope (simple scalars,
+call, to C<next> statement with an argument,
+or to a scalar value in the outer scope (simple scalars,
 hash elements, or dereferenced hashref elements chained to
 an arbitrary depth are supported).
 
@@ -923,6 +928,20 @@ verbatim SQL pieces:
         tab->id = `some_seq.nextval`;
     };
 
+A C<next> statement with a (label) argument is interpreted as
+an operator of getting the next value out of a sequence,
+where the label name is the name of the sequence.
+Syntax specific to the DBI driver will be used to represent
+this operation.  It is a fatal error to use such a statement
+with DBI drivers which do not support sequences.  For example,
+the following is exactly equivalent to the example above,
+except it is more portable:
+
+    db_update {
+        tab->state eq "new";
+        tab->id = next some_seq;
+    };
+
 The "comes from" C<E<lt>-> binary operator can be used in the
 following manner:
 
@@ -964,6 +983,11 @@ One can also specify a "distinct" or "DISTINCT"
 string constant in the beginning of the return list,
 in which case duplicated rows will be eliminated
 from the result set.
+
+It is also permissible to use a C<next> operator with a label
+argument (see above) in return statements:
+
+    return next some_seq;
 
 Return statements are only valid in L</db_fetch {}>.
 
