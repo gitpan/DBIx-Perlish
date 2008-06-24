@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.85 2008/05/27 10:37:07 tobez Exp $
+# $Id: Parse.pm,v 1.86 2008/06/24 21:18:29 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -1684,6 +1684,8 @@ sub parse_op
 		push @{$S->{sets}}, parse_selfmod($S, $op->first, "+ 1");
 	} elsif (is_unop($op, "predec")) {
 		push @{$S->{sets}}, parse_selfmod($S, $op->first, "- 1");
+	} elsif (is_listop($op, "exec")) {
+		$S->{seen_exec}++;
 	} else {
 		bailout $S, "don't quite know what to do with op \"" . $op->name . "\"";
 	}
