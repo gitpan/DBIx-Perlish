@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.102 2008/08/28 11:13:00 tobez Exp $
+# $Id: Perlish.pm,v 1.104 2008/09/08 07:49:02 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.43';
+$VERSION = '0.44';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -47,17 +47,16 @@ sub import
 			$p{dbh} && ref $p{dbh} && (ref $p{dbh} eq "SCALAR" || ref $p{dbh} eq "REF"))
 		{
 			my $dbhref = $p{dbh};
-			my $o;
 			no strict 'refs';
 			*{$pkg."::$p{prefix}_fetch"} =
 			*{$pkg."::$p{prefix}_select"} =
-				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->fetch(@_) };
+				sub (&) { my $o = DBIx::Perlish->new(dbh => $$dbhref); $o->fetch(@_) };
 			*{$pkg."::$p{prefix}_update"} =
-				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->update(@_) };
+				sub (&) { my $o = DBIx::Perlish->new(dbh => $$dbhref); $o->update(@_) };
 			*{$pkg."::$p{prefix}_delete"} =
-				sub (&) { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->delete(@_) };
+				sub (&) { my $o = DBIx::Perlish->new(dbh => $$dbhref); $o->delete(@_) };
 			*{$pkg."::$p{prefix}_insert"} =
-				sub { $o ||= DBIx::Perlish->new(dbh => $$dbhref); $o->insert(@_) };
+				sub { my $o = DBIx::Perlish->new(dbh => $$dbhref); $o->insert(@_) };
 			return;
 		}
 	}
@@ -370,7 +369,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.43
+This document describes DBIx::Perlish version 0.44
 
 
 =head1 SYNOPSIS
