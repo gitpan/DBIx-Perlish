@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.89 2008/08/28 11:09:59 tobez Exp $
+# $Id: Parse.pm,v 1.91 2008/10/16 08:18:01 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -535,8 +535,7 @@ sub parse_term
 			"$term is not null";
 	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
 		if (defined $val) {
-			push @{$S->{values}}, $val;
-			return "?";
+			return placeholder_value($S, $val);
 		} else {
 			return "null";
 		}
@@ -569,8 +568,7 @@ sub parse_term
 			# This will probably be represented by a string,
 			# we'll let DBI to handle the quoting of a bound
 			# value.
-			push @{$S->{values}}, $const;
-			return "?";
+			return placeholder_value($S, $const);
 		}
 	} elsif (is_pvop($op, "next")) {
 		my $seq = $op->pv;
@@ -588,6 +586,14 @@ sub parse_term
 		bailout $S, "cannot reconstruct term from operation \"",
 				$op->name, '"';
 	}
+}
+
+sub placeholder_value
+{
+	my ($S, $val) = @_;
+	my $pos = @{$S->{values}};
+	push @{$S->{values}}, $val;
+	return DBIx::Perlish::Placeholder->new($S, $pos);
 }
 
 ## XXX above this point 80.parse_bad.t did not go
@@ -896,6 +902,12 @@ sub try_funcall
 		return "sysdate"
 			if ($S->{gen_args}->{flavor}||"") eq "oracle" &&
 				lc $func eq "sysdate" && !@terms;
+		if (lc $func eq "extract" && @terms == 2) {
+			if (UNIVERSAL::isa($terms[0], "DBIx::Perlish::Placeholder")) {
+				my $val = $terms[0]->undo;
+				@terms = ("$val from $terms[1]");
+			}
+		}
 		return "$func(" . join(", ", @terms) . ")";
 	}
 }
@@ -1769,6 +1781,28 @@ $_cover = sub {};
 if (*Devel::Cover::coverage{CODE}) {
 	my $Coverage = Devel::Cover::coverage(0);
 	$_cover = sub { $Coverage->{statement}{Devel::Cover::get_key($_[0])} ||= 1 };
+}
+
+package DBIx::Perlish::Placeholder;
+
+use overload '""' => sub { "?" }, eq => sub { "$_[0]" eq "$_[1]" };
+
+sub new
+{
+	my ($class, $S, $pos) = @_;
+	bless { S => $S, position => $pos }, $class;
+}
+
+sub value
+{
+	my $me = shift;
+	return $me->{S}{values}[$me->{position}];
+}
+
+sub undo
+{
+	my $me = shift;
+	splice @{$me->{S}{values}}, $me->{position}, 1;
 }
 
 1;
