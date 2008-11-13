@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.92 2008/11/08 17:31:35 tobez Exp $
+# $Id: Parse.pm,v 1.93 2008/11/13 08:58:57 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -609,7 +609,7 @@ sub placeholder_value
 sub parse_simple_term
 {
 	my ($S, $op) = @_;
-	if (my $const = is_const($S, $op)) {
+	if (my ($const,$sv) = is_const($S, $op)) {
 		return $const;
 	} elsif (my ($val, $ok) = get_value($S, $op, soft => 1)) {
 		return $val;
