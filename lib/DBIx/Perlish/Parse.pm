@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.94 2008/11/21 15:06:05 tobez Exp $
+# $Id: Parse.pm,v 1.95 2008/12/04 11:00:06 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -1817,4 +1817,4 @@ sub undo
 	splice @{$me->{S}{values}}, $me->{position}, 1;
 }
 
-1;
+"the magic stops here; welcome to the real world";
