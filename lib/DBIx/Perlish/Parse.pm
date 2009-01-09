@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.95 2008/12/04 11:00:06 tobez Exp $
+# $Id: Parse.pm,v 1.96 2009/01/09 15:52:45 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -590,6 +590,8 @@ sub parse_term
 		} else {
 			bailout $S, "Sequences do not seem to be supported for this DBI flavor";
 		}
+	} elsif (is_pmop($op, "match")) {
+		return parse_regex($S, $op, 0);
 	} else {
 		bailout $S, "cannot reconstruct term from operation \"",
 				$op->name, '"';
