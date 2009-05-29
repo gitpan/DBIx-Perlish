@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.97 2009/02/16 12:08:49 tobez Exp $
+# $Id: Parse.pm,v 1.99 2009/05/29 18:10:31 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -584,7 +584,7 @@ sub parse_term
 		if ($flavor eq "oracle") {
 			bailout $S, "Sequence name looks wrong" unless $seq =~ /^\w+$/;
 			return "$seq.nextval";
-		} elsif ($flavor eq "postgresql" || $flavor eq "pglite") {
+		} elsif ($flavor eq "pg" || $flavor eq "pglite") {
 			bailout $S, "Sequence name looks wrong" if $seq =~ /'/; # XXX well, I am lazy
 			return "nextval('$seq')";
 		} else {
@@ -1009,6 +1009,7 @@ my %binop_map = (
 	multiply => "*",
 	divide   => "/",
 	concat   => "||",
+	pow      => "^",
 );
 my %binop2_map = (
 	add      => "+",
@@ -1016,6 +1017,7 @@ my %binop2_map = (
 	multiply => "*",
 	divide   => "/",
 	concat   => "||",
+	pow      => "^",
 );
 
 sub parse_expr
@@ -1040,7 +1042,16 @@ sub parse_expr
 			my $set = parse_term($S, $op->last);
 			push @{$S->{set_values}}, @{$S->{values}};
 			$S->{values} = $saved_values;
-			push @{$S->{sets}}, "$f = $f $binop2_map{$op->name} $set";
+			if ($op->name eq "pow") {
+				my $flavor = lc($S->{gen_args}->{flavor} || '');
+				if ($flavor eq "pg" || $flavor eq "pglite") {
+					push @{$S->{sets}}, "$f = pow($f, $set)";
+				} else {
+					bailout $S, "exponentiation is not supported for $flavor DB driver";
+				}
+			} else {
+				push @{$S->{sets}}, "$f = $f $binop2_map{$op->name} $set";
+			}
 			return ();
 		}
 	}
@@ -1060,6 +1071,14 @@ sub parse_expr
 				return "$left is$not null";
 			} elsif ($left eq "null") {
 				return "$right is$not null";
+			}
+		}
+		if ($op->name eq "pow") {
+			my $flavor = lc($S->{gen_args}->{flavor} || '');
+			if ($flavor eq "pg" || $flavor eq "pglite") {
+				return "pow($left, $right)";
+			} else {
+				bailout $S, "exponentiation is not supported for $flavor DB driver";
 			}
 		}
 		return "$left $sqlop $right";
@@ -1243,7 +1262,7 @@ sub parse_regex
 			( $case ? '' : 'binary ') .
 			"'$like'"
 			;
-	} elsif ( $flavor eq 'postgresql' || $flavor eq "pglite") {
+	} elsif ( $flavor eq 'pg' || $flavor eq "pglite") {
 		# LIKE is case-sensitive
 		if ( $can_like) {
 			$what = 'ilike' if $case;
@@ -1296,7 +1315,7 @@ sub parse_regex
 			if $like =~ /(?<!\\)[\[\]\(\)\{\}\?\|]/;
 LIKE:
 		my $escape = "";
-		if ($flavor eq "postgresql" || $flavor eq "oracle") {
+		if ($flavor eq "pg" || $flavor eq "oracle") {
 			# XXX it is possible that more flavors support like...escape
 			my $need_esc = 1 if $like =~ s/!/!!/g;
 			   $need_esc = 1 if $like =~ s/%/!%/g;

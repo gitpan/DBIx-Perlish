@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.113 2009/02/16 12:08:49 tobez Exp $
+# $Id: Perlish.pm,v 1.115 2009/05/29 18:14:55 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.52';
+$VERSION = '0.53';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -395,7 +395,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.52
+This document describes DBIx::Perlish version 0.53
 
 
 =head1 SYNOPSIS
@@ -1406,7 +1406,7 @@ will execute the equivalent of the following SQL statement:
 
   select name, type, count(age) from tab group by name, type
 
-The C<avg()>, C<count()>, C<max()>, C<min()>, and C<sub()>
+The C<avg()>, C<count()>, C<max()>, C<min()>, and C<sum()>
 functions are considered to be aggregate.
 
 Specifying label C<table:> followed by a lexical variable
