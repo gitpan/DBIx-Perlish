@@ -1,5 +1,5 @@
 package DBIx::Perlish;
-# $Id: Perlish.pm,v 1.117 2009/06/12 11:10:15 tobez Exp $
+# $Id: Perlish.pm,v 1.120 2009/09/10 19:51:13 tobez Exp $
 
 use 5.008;
 use warnings;
@@ -10,7 +10,7 @@ use vars qw($VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $SQL @BIND_VALUES);
 require Exporter;
 use base 'Exporter';
 
-$VERSION = '0.54';
+$VERSION = '0.55';
 @EXPORT = qw(db_fetch db_select db_update db_delete db_insert sql);
 @EXPORT_OK = qw(union intersect except);
 %EXPORT_TAGS = (all => [@EXPORT, @EXPORT_OK]);
@@ -423,7 +423,7 @@ DBIx::Perlish - a perlish interface to SQL databases
 
 =head1 VERSION
 
-This document describes DBIx::Perlish version 0.54
+This document describes DBIx::Perlish version 0.55
 
 
 =head1 SYNOPSIS
@@ -706,7 +706,7 @@ in the scalar context, which always returns a single row (or a single
 value), as explained above.
 
 The individual results in such a result set will be hash references
-if the return statement specifies more than on column (not counting
+if the return statement specifies more than one column (not counting
 the key fields), or a simple value if the return statement specifies
 exactly one column in addition to the key fields.  For example,
 
@@ -1827,8 +1827,10 @@ Currently, only statement and sub execution data are faked.
 =head1 DEPENDENCIES
 
 The C<DBIx::Perlish> module needs at least perl 5.8.2, quite possibly
-a somewhat higher version.  I have only tested it on
-5.8.8 and 5.8.4.
+a somewhat higher version.  I have only tested it with
+5.8.4, 5.8.8, 5.8.9, and 5.10.0, while
+the CPAN testers, http://www.cpantesters.org/distro/D/DBIx-Perlish.html ,
+provided much better coverage.
 
 This module requires C<DBI> to do anything useful.
 
@@ -1914,7 +1916,7 @@ There is also the project website at
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright (c) 2007, 2008, Anton Berezin C<< <tobez@tobez.org> >>. All rights reserved.
+Copyright (c) 2007-2009, Anton Berezin C<< <tobez@tobez.org> >>. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions

@@ -1,5 +1,5 @@
 package DBIx::Perlish::Parse;
-# $Id: Parse.pm,v 1.99 2009/05/29 18:10:31 tobez Exp $
+# $Id: Parse.pm,v 1.100 2009/09/10 19:51:14 tobez Exp $
 use 5.008;
 use warnings;
 use strict;
@@ -1186,7 +1186,12 @@ sub try_special_concat
 		push @v, $str;
 		push @sql, '?';
 	}
-	my $sql = join " || ", @sql;
+	my $sql;
+	if (lc($S-> {gen_args}-> {flavor} || '') eq "mysql") {
+		$sql = "concat(" . join(", ", @sql) . ")";
+	} else {
+		$sql = join " || ", @sql;
+	}
 	return ($sql, \@v);
 }
 
