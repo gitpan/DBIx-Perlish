@@ -1,4 +1,4 @@
-# $Id: 08.inline-views.t,v 1.1 2007/10/01 07:24:56 tobez Exp $
+# $Id$
 use warnings;
 use strict;
 use Test::More tests => 9;

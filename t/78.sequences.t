@@ -1,4 +1,4 @@
-# $Id: 78.sequences.t,v 1.2 2009/05/29 17:56:45 tobez Exp $
+# $Id$
 use warnings;
 use strict;
 use Test::More tests => 25;

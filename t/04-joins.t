@@ -1,4 +1,4 @@
-# $Id: 04-joins.t,v 1.7 2009/01/09 15:52:45 tobez Exp $
+# $Id$
 use warnings;
 use strict;
 use Test::More tests => 46;
